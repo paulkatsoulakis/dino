@@ -1,3 +1,5 @@
+[![Go Report Card](https://goreportcard.com/badge/github.com/nicolagi/dino)](https://goreportcard.com/report/github.com/nicolagi/dino)
+
 # dino
 
 ## Introduction
