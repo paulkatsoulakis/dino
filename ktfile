@@ -1,0 +1,22 @@
+{
+  "shell": "rc",
+  "timeout": 30,
+  "exclude": [
+    "\\.git"
+  ],
+  "rules": [
+    {
+      "include": [
+        "\\.go$"
+      ],
+      "exclude": [
+        "#.*"
+      ],
+      "run": [
+        {
+          "script": "pkg=github.com/nicolagi/dino/^`{dirname $CHANGED_PATH}\ngo test -race $pkg\ngolangci-lint run -E gocritic -E prealloc -E scopelint -E bodyclose `{dirname $CHANGED_PATH}\nerrcheck $pkg\nstaticcheck $pkg"
+        }
+      ]
+    }
+  ]
+}

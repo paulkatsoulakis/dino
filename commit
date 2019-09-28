@@ -1,0 +1,16 @@
+#!/usr/local/plan9/bin/rc
+. 9.rc
+for (dir in `{
+    du | awk '!/\.\/\./ { print $2 }' | sort
+}) {
+    ls $dir/*.go >/dev/null >[2=1] && {
+        echo Running programs in $dir
+        goimports -w $dir || exit 1
+        staticcheck $dir || exit 1
+        errcheck $dir || exit 1
+        go test -count 1 $dir || exit 1
+        go test -race -count 1 $dir
+    }
+}
+go mod tidy || exit 1
+git gui
