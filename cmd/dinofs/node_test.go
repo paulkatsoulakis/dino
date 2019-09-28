@@ -30,12 +30,12 @@ func TestNodeMetadataRollback(t *testing.T) {
 	g := newInodeNumbersGenerator()
 	go g.start()
 	defer g.stop()
-	factory := newDinoNodeFactory(g)
+	factory := &dinoNodeFactory{inogen: g}
 	ko := func() {
-		metadataStore = fixedReply("computer bought the farm")
+		factory.metadata = fixedReply("computer bought the farm")
 	}
 	ok := func() {
-		metadataStore = fixedReply("")
+		factory.metadata = fixedReply("")
 	}
 	t.Run("Setxattr", func(t *testing.T) {
 		t.Run("rolls back additions", func(t *testing.T) {

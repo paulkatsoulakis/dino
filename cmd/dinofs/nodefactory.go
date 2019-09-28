@@ -4,16 +4,15 @@ import (
 	"crypto/rand"
 	"fmt"
 	"time"
+
+	"github.com/nicolagi/dino/storage"
 )
 
 type dinoNodeFactory struct {
-	inogen *inodeNumbersGenerator
-}
-
-func newDinoNodeFactory(inogen *inodeNumbersGenerator) *dinoNodeFactory {
-	return &dinoNodeFactory{
-		inogen: inogen,
-	}
+	root     *dinoNode
+	inogen   *inodeNumbersGenerator
+	metadata storage.VersionedStore
+	blobs    *storage.BlobStoreWrapper
 }
 
 func (factory *dinoNodeFactory) allocNode() (*dinoNode, error) {

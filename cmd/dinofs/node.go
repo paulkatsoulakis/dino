@@ -182,7 +182,7 @@ func (node *dinoNode) Unlink(ctx context.Context, name string) syscall.Errno {
 
 // Call with lock held.
 func (node *dinoNode) fullPath() string {
-	return node.Path(root.EmbeddedInode())
+	return node.Path(node.factory.root.EmbeddedInode())
 }
 
 // Call with lock held.
@@ -192,7 +192,7 @@ func (node *dinoNode) reloadIfNeeded() syscall.Errno {
 	}
 	logger := log.WithField("parent", node.name)
 	var nn dinoNode
-	if err := nn.loadMetadata(metadataStore, node.key); err != nil {
+	if err := nn.loadMetadata(node.key); err != nil {
 		logger.WithField("err", err).Error("Could not reload")
 		return syscall.EIO
 	}
@@ -291,7 +291,7 @@ func (node *dinoNode) ensureChildLoaded(ctx context.Context, childNode *dinoNode
 	if childNode.mode != modeNotLoaded {
 		return 0
 	}
-	if err := childNode.loadMetadata(metadataStore, childNode.key); err != nil {
+	if err := childNode.loadMetadata(childNode.key); err != nil {
 		log.WithFields(log.Fields{
 			"err":    err,
 			"child":  childNode.name,
@@ -445,7 +445,7 @@ func (node *dinoNode) ensureContentLoaded() syscall.Errno {
 	if len(node.content) != 0 {
 		return 0
 	}
-	value, err := blobStore.Get(node.contentKey)
+	value, err := node.factory.blobs.Get(node.contentKey)
 	if err != nil {
 		logger.WithField("err", err).Error("Could not load content")
 		return syscall.EIO

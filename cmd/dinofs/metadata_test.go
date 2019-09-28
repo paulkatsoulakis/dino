@@ -16,16 +16,17 @@ func TestNodeSerialization(t *testing.T) {
 	g := newInodeNumbersGenerator()
 	go g.start()
 	defer g.stop()
-	factory := newDinoNodeFactory(g)
 	rand.Seed(time.Now().UnixNano())
 	store := storage.NewInMemoryStore()
 	versioned := storage.NewVersionedWrapper(store)
+	factory := &dinoNodeFactory{inogen: g, metadata: versioned}
 	for i := 0; i < 100; i++ {
 		before := randomNode(t, factory)
-		err := before.saveMetadata(versioned)
+		err := before.saveMetadata()
 		require.Nil(t, err)
-		var after dinoNode
-		err = after.loadMetadata(versioned, before.key)
+		after, err := factory.allocNode()
+		require.Nil(t, err)
+		err = after.loadMetadata(before.key)
 		require.Nil(t, err)
 		assert.Equal(t, before.user, after.user)
 		assert.Equal(t, before.group, after.group)

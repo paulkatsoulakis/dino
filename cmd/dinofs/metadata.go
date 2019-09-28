@@ -10,7 +10,6 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/nicolagi/dino/bits"
 	"github.com/nicolagi/dino/message"
-	"github.com/nicolagi/dino/storage"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -81,9 +80,9 @@ func (node *dinoNode) unserialize(b []byte) {
 	}
 }
 
-func (node *dinoNode) saveMetadata(store storage.VersionedStore) error {
+func (node *dinoNode) saveMetadata() error {
 	value := node.serialize()
-	err := store.Put(node.version+1, node.key[:], value)
+	err := node.factory.metadata.Put(node.version+1, node.key[:], value)
 	if err != nil {
 		return err
 	}
@@ -91,8 +90,8 @@ func (node *dinoNode) saveMetadata(store storage.VersionedStore) error {
 	return nil
 }
 
-func (node *dinoNode) loadMetadata(store storage.VersionedStore, key [nodeKeyLen]byte) error {
-	version, b, err := store.Get(key[:])
+func (node *dinoNode) loadMetadata(key [nodeKeyLen]byte) error {
+	version, b, err := node.factory.metadata.Get(key[:])
 	if err != nil {
 		return err
 	}
@@ -138,7 +137,7 @@ func (node *dinoNode) sync() syscall.Errno {
 	if node.shouldSaveContent {
 		var err error
 		prev := node.contentKey
-		node.contentKey, err = blobStore.Put(node.content)
+		node.contentKey, err = node.factory.blobs.Put(node.content)
 		if err != nil {
 			log.WithFields(log.Fields{
 				"err": err,
@@ -151,7 +150,7 @@ func (node *dinoNode) sync() syscall.Errno {
 		}
 	}
 	if node.shouldSaveMetadata {
-		err := node.saveMetadata(metadataStore)
+		err := node.saveMetadata()
 		if err != nil {
 			log.WithFields(log.Fields{
 				"err": err,
