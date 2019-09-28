@@ -3,6 +3,8 @@ package main
 import (
 	"errors"
 	"flag"
+	"fmt"
+	golog "log"
 	"os"
 	"time"
 
@@ -24,17 +26,21 @@ var (
 )
 
 func main() {
-	optsFile := flag.String("config", os.ExpandEnv("$HOME/lib/dino/dinofs.config"), "location of configuration file")
+	defaultConfigFile := os.ExpandEnv("$HOME/lib/dino/dinofs.config")
+	configFile := flag.String("config", defaultConfigFile, "location of configuration file")
 	flag.Parse()
 
-	opts, err := loadOptions(*optsFile)
+	opts, err := loadConfig(*configFile)
 	if err != nil {
-		log.Fatalf("Loading configuration from %q: %v", *optsFile, err)
+		log.Fatalf("Loading configuration from %q: %v", *configFile, err)
 	}
 
 	if opts.Debug {
 		log.SetLevel(log.DebugLevel)
 	}
+
+	cleanup := redirectLogging(opts)
+	defer cleanup()
 
 	if err := agent.Listen(agent.Options{}); err != nil {
 		log.WithField("err", err).Warn("Could not start gops agent")
@@ -86,4 +92,25 @@ func main() {
 	// The following call returns when the filesystem is unmounted (e.g.,
 	// with "fusermount -u /n/dino").
 	server.Wait()
+}
+
+func redirectLogging(c *config) (cleanup func()) {
+	golog.SetOutput(log.StandardLogger().Writer())
+	if c.LogPath == "" {
+		return func() {}
+	}
+	pathname := os.ExpandEnv(c.LogPath)
+	logger := log.WithField("pathname", pathname)
+	f, err := os.OpenFile(pathname, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0600)
+	if err != nil {
+		logger.WithField("err", err).Fatal("Could not open log file")
+	}
+	logger.Info("Lines after this one will logged to a file")
+	log.SetOutput(f)
+	return func() {
+		if err := f.Close(); err != nil {
+			// Can't use the logger here!
+			_, _ = fmt.Fprintf(os.Stderr, "Could not close log file cleanly %q: %v", pathname, err)
+		}
+	}
 }
