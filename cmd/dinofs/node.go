@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"fmt"
 	"strconv"
 	"sync"
@@ -49,6 +48,9 @@ func addKnown(node *dinoNode) {
 
 type dinoNode struct {
 	fs.Inode
+
+	// Injected by the node factory itself.
+	factory *dinoNodeFactory
 
 	mu sync.Mutex
 
@@ -178,20 +180,6 @@ func (node *dinoNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	return node.sync()
 }
 
-func allocNode() (*dinoNode, error) {
-	var node dinoNode
-	node.time = time.Now()
-	n, err := rand.Read(node.key[:])
-	if err != nil {
-		return nil, err
-	}
-	if n != nodeKeyLen {
-		return nil, fmt.Errorf("could only read %d of %d random bytes", n, nodeKeyLen)
-	}
-	addKnown(&node)
-	return &node, nil
-}
-
 // Call with lock held.
 func (node *dinoNode) fullPath() string {
 	return node.Path(root.EmbeddedInode())
@@ -314,7 +302,7 @@ func (node *dinoNode) ensureChildLoaded(ctx context.Context, childNode *dinoNode
 	addKnown(childNode)
 	node.AddChild(childNode.name, node.NewInode(ctx, childNode, fs.StableAttr{
 		Mode: childNode.mode,
-		Ino:  nextInodeNumber(),
+		Ino:  node.factory.inogen.next(),
 	}), false)
 	return 0
 }
@@ -411,9 +399,9 @@ func (node *dinoNode) Symlink(ctx context.Context, target, name string, out *fus
 func (node *dinoNode) createLockedChild(ctx context.Context, name string, mode uint32, orMode uint32) (*fs.Inode, *dinoNode, syscall.Errno) {
 	id := fs.StableAttr{
 		Mode: mode | orMode,
-		Ino:  nextInodeNumber(),
+		Ino:  node.factory.inogen.next(),
 	}
-	childNode, err := allocNode()
+	childNode, err := node.factory.allocNode()
 	if err != nil {
 		log.WithFields(log.Fields{
 			"err":    err,

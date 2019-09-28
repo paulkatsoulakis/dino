@@ -27,6 +27,10 @@ func (reply fixedReply) Put(uint64, []byte, []byte) error {
 }
 
 func TestNodeMetadataRollback(t *testing.T) {
+	g := newInodeNumbersGenerator()
+	go g.start()
+	defer g.stop()
+	factory := newDinoNodeFactory(g)
 	ko := func() {
 		metadataStore = fixedReply("computer bought the farm")
 	}
@@ -35,7 +39,7 @@ func TestNodeMetadataRollback(t *testing.T) {
 	}
 	t.Run("Setxattr", func(t *testing.T) {
 		t.Run("rolls back additions", func(t *testing.T) {
-			node, err := allocNode()
+			node, err := factory.allocNode()
 			require.Nil(t, err)
 			ko()
 			errno := node.Setxattr(context.Background(), "key", []byte("value"), 0)
@@ -43,7 +47,7 @@ func TestNodeMetadataRollback(t *testing.T) {
 			assert.Len(t, node.xattrs, 0)
 		})
 		t.Run("rolls back updates", func(t *testing.T) {
-			node, err := allocNode()
+			node, err := factory.allocNode()
 			require.Nil(t, err)
 			ok()
 			errno := node.Setxattr(context.Background(), "key", []byte("old value"), 0)

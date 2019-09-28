@@ -13,11 +13,15 @@ import (
 )
 
 func TestNodeSerialization(t *testing.T) {
+	g := newInodeNumbersGenerator()
+	go g.start()
+	defer g.stop()
+	factory := newDinoNodeFactory(g)
 	rand.Seed(time.Now().UnixNano())
 	store := storage.NewInMemoryStore()
 	versioned := storage.NewVersionedWrapper(store)
 	for i := 0; i < 100; i++ {
-		before := randomNode(t)
+		before := randomNode(t, factory)
 		err := before.saveMetadata(versioned)
 		require.Nil(t, err)
 		var after dinoNode
@@ -33,8 +37,8 @@ func TestNodeSerialization(t *testing.T) {
 	}
 }
 
-func randomNode(t *testing.T) *dinoNode {
-	node, err := allocNode()
+func randomNode(t *testing.T, factory *dinoNodeFactory) *dinoNode {
+	node, err := factory.allocNode()
 	require.Nil(t, err)
 	node.user = rand.Uint32()
 	node.group = rand.Uint32()

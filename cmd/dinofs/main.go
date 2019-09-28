@@ -64,7 +64,10 @@ func main() {
 	)
 	blobStore = storage.NewBlobStore(pairedStore)
 
-	generateInodeNumbers()
+	g := newInodeNumbersGenerator()
+	go g.start()
+	defer g.stop()
+	factory := newDinoNodeFactory(g)
 
 	var fsopts fs.Options
 	fsopts.Debug = config.DebugFUSE
@@ -72,6 +75,7 @@ func main() {
 	fsopts.GID = uint32(os.Getgid())
 	fsopts.FsName = config.Name
 	fsopts.Name = "dinofs"
+	root.factory = factory
 	root.name = "root"
 	if err := root.loadMetadata(metadataStore, root.key); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
