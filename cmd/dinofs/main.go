@@ -30,16 +30,18 @@ func main() {
 	configFile := flag.String("config", defaultConfigFile, "location of configuration file")
 	flag.Parse()
 
-	opts, err := loadConfig(*configFile)
+	config, err := loadConfig(*configFile)
 	if err != nil {
 		log.Fatalf("Loading configuration from %q: %v", *configFile, err)
 	}
 
-	if opts.Debug {
+	config.applyDefaultsForMissingProperties()
+
+	if config.Debug {
 		log.SetLevel(log.DebugLevel)
 	}
 
-	cleanup := redirectLogging(opts)
+	cleanup := redirectLogging(config)
 	defer cleanup()
 
 	if err := agent.Listen(agent.Options{}); err != nil {
@@ -48,7 +50,7 @@ func main() {
 		defer agent.Close()
 	}
 
-	remoteClient, err := client.New(client.WithAddress(opts.MetadataServer), client.WithTimeout(time.Second))
+	remoteClient, err := client.New(client.WithAddress(config.MetadataServer), client.WithTimeout(time.Second))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -57,18 +59,18 @@ func main() {
 	metadataStore = rvs
 
 	pairedStore := storage.NewPaired(
-		storage.NewDiskStore(os.ExpandEnv("$HOME/lib/dino/data")),
-		storage.NewRemoteStore(opts.BlobServer),
+		storage.NewDiskStore(os.ExpandEnv(config.DataPath)),
+		storage.NewRemoteStore(config.BlobServer),
 	)
 	blobStore = storage.NewBlobStore(pairedStore)
 
 	generateInodeNumbers()
 
 	var fsopts fs.Options
-	fsopts.Debug = opts.DebugFUSE
+	fsopts.Debug = config.DebugFUSE
 	fsopts.UID = uint32(os.Getuid())
 	fsopts.GID = uint32(os.Getgid())
-	fsopts.FsName = opts.Name
+	fsopts.FsName = config.Name
 	fsopts.Name = "dinofs"
 	root.name = "root"
 	if err := root.loadMetadata(metadataStore, root.key); err != nil {
@@ -81,7 +83,7 @@ func main() {
 		}
 	}
 
-	mount := os.ExpandEnv(opts.Mountpoint)
+	mount := os.ExpandEnv(config.Mountpoint)
 	server, err := fs.Mount(mount, &root, &fsopts)
 	if err != nil {
 		log.Fatalf("Could not mount on %q: %v", mount, err)
