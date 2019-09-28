@@ -121,9 +121,19 @@ func (node *dinoNode) Setxattr(ctx context.Context, attr string, data []byte, fl
 			return syscall.ENODATA
 		}
 	}
+	rbdata := node.xattrs[attr]
 	node.xattrs[attr] = append([]byte{}, data...)
 	node.shouldSaveMetadata = true
-	return node.sync()
+	errno := node.sync()
+	// Rollback.
+	if errno != 0 {
+		if rbdata != nil {
+			node.xattrs[attr] = rbdata
+		} else {
+			delete(node.xattrs, attr)
+		}
+	}
+	return errno
 }
 
 // Getxattr should read data for the given attribute into
