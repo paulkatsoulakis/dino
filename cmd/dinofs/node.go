@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"strconv"
 	"sync"
 	"syscall"
@@ -20,31 +19,6 @@ const (
 	nodeKeyLen    int    = 20
 	modeNotLoaded uint32 = 0xffffffff
 )
-
-// Track discovered nodes by key.
-var (
-	knownNodes = struct {
-		sync.Mutex
-		m map[[nodeKeyLen]byte]*dinoNode
-	}{
-		m: make(map[[nodeKeyLen]byte]*dinoNode),
-	}
-)
-
-func addKnown(node *dinoNode) {
-	knownNodes.Lock()
-	defer knownNodes.Unlock()
-	if _, ok := knownNodes.m[node.key]; ok {
-		return
-	}
-	knownNodes.m[node.key] = node
-	logger := log.WithField("key", fmt.Sprintf("%.10x", node.key[:]))
-	if node.name != "" {
-		logger.WithField("name", node.name).Debug("Discovered node")
-	} else {
-		logger.Debug("Added node")
-	}
-}
 
 type dinoNode struct {
 	fs.Inode
@@ -191,7 +165,7 @@ func (node *dinoNode) reloadIfNeeded() syscall.Errno {
 		return 0
 	}
 	logger := log.WithField("parent", node.name)
-	var nn dinoNode
+	nn := &dinoNode{factory: node.factory}
 	if err := nn.loadMetadata(node.key); err != nil {
 		logger.WithField("err", err).Error("Could not reload")
 		return syscall.EIO
@@ -299,7 +273,6 @@ func (node *dinoNode) ensureChildLoaded(ctx context.Context, childNode *dinoNode
 		}).Error("could not load metadata")
 		return syscall.EIO
 	}
-	addKnown(childNode)
 	node.AddChild(childNode.name, node.NewInode(ctx, childNode, fs.StableAttr{
 		Mode: childNode.mode,
 		Ino:  node.factory.inogen.next(),

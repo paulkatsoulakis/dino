@@ -6,10 +6,8 @@ import (
 	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
-
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/nicolagi/dino/bits"
-	"github.com/nicolagi/dino/message"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -71,11 +69,9 @@ func (node *dinoNode) unserialize(b []byte) {
 		for len(b) > 0 {
 			childName, b = bits.Gets(b)
 			childKey, b = bits.Getb(b)
-			var childNode dinoNode
-			copy(childNode.key[:], childKey)
-			childNode.name = childName
-			childNode.mode = modeNotLoaded
-			node.children[childNode.name] = &childNode
+			var key [nodeKeyLen]byte
+			copy(key[:], childKey)
+			node.children[childName] = node.factory.existingNode(childName, key)
 		}
 	}
 }
@@ -99,38 +95,6 @@ func (node *dinoNode) loadMetadata(key [nodeKeyLen]byte) error {
 	node.version = version
 	node.unserialize(b)
 	return nil
-}
-
-func importMetadata(mutation message.Message) {
-	logger := log.WithFields(log.Fields{
-		"op":       "import",
-		"mutation": mutation.String(),
-	})
-	if len(mutation.Key()) != nodeKeyLen {
-		logger.Debug("Not updating (not a metadata key)")
-		return
-	}
-	var key [nodeKeyLen]byte
-	copy(key[:], mutation.Key())
-	knownNodes.Lock()
-	node := knownNodes.m[key]
-	knownNodes.Unlock()
-	if node == nil {
-		logger.Debug("Not updating (unknown node)")
-		return
-	}
-	node.mu.Lock()
-	defer node.mu.Unlock()
-	logger = logger.WithFields(log.Fields{
-		"localVersion": node.version,
-		"localName":    node.name,
-	})
-	if mutation.Version() <= node.version {
-		logger.Debug("Not updating (stale update)")
-		return
-	}
-	logger.Debug("Marking for update")
-	node.shouldReloadMetadata = true
 }
 
 func (node *dinoNode) sync() syscall.Errno {

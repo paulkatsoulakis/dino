@@ -45,26 +45,23 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	rvs := storage.NewRemoteVersionedStore(remoteClient, importMetadata)
+
+	var factory dinoNodeFactory
+
+	rvs := storage.NewRemoteVersionedStore(remoteClient, factory.invalidateCache)
 	rvs.Start()
+	factory.metadata = rvs
 
 	pairedStore := storage.NewPaired(
 		storage.NewDiskStore(os.ExpandEnv(config.DataPath)),
 		storage.NewRemoteStore(config.BlobServer),
 	)
+	factory.blobs = storage.NewBlobStore(pairedStore)
 
 	g := newInodeNumbersGenerator()
 	go g.start()
 	defer g.stop()
-
-	var root dinoNode
-
-	factory := &dinoNodeFactory{
-		root:     &root,
-		inogen:   g,
-		metadata: rvs,
-		blobs:    storage.NewBlobStore(pairedStore),
-	}
+	factory.inogen = g
 
 	var fsopts fs.Options
 	fsopts.Debug = config.DebugFUSE
@@ -72,8 +69,9 @@ func main() {
 	fsopts.GID = uint32(os.Getgid())
 	fsopts.FsName = config.Name
 	fsopts.Name = "dinofs"
-	root.factory = factory
-	root.name = "root"
+	var rootKey [nodeKeyLen]byte
+	root := factory.existingNode("root", rootKey)
+	factory.root = root
 	if err := root.loadMetadata(root.key); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			log.Infof("Serving an empty file system (no metadata found for root node)")
@@ -85,12 +83,10 @@ func main() {
 	}
 
 	mount := os.ExpandEnv(config.Mountpoint)
-	server, err := fs.Mount(mount, &root, &fsopts)
+	server, err := fs.Mount(mount, root, &fsopts)
 	if err != nil {
 		log.Fatalf("Could not mount on %q: %v", mount, err)
 	}
-
-	addKnown(&root)
 
 	// The following call returns when the filesystem is unmounted (e.g.,
 	// with "fusermount -u /n/dino").
