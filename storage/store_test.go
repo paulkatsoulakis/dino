@@ -106,7 +106,7 @@ func TestVersionedStoreImplementations(t *testing.T) {
 				}()
 				remoteClient, err := client.New(client.WithAddress(remoteAddress), client.WithTimeout(250*time.Millisecond))
 				require.Nil(t, err)
-				remoteStore := storage.NewRemoteVersionedStore(remoteClient, nil)
+				remoteStore := storage.NewRemoteVersionedStore(remoteClient)
 				remoteStore.Start()
 				return remoteStore, func() {
 					remoteStore.Stop()

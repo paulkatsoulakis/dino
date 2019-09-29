@@ -48,7 +48,7 @@ func main() {
 
 	var factory dinoNodeFactory
 
-	rvs := storage.NewRemoteVersionedStore(remoteClient, factory.invalidateCache)
+	rvs := storage.NewRemoteVersionedStore(remoteClient, storage.WithChangeListener(factory.invalidateCache))
 	rvs.Start()
 	factory.metadata = rvs
 

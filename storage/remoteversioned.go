@@ -17,6 +17,37 @@ var (
 	ErrCancelledRendezvous = errors.New("request and response did not meet")
 )
 
+type options struct {
+	requestTimeout  time.Duration
+	responseBackoff time.Duration
+	listener        ChangeListener
+}
+
+var defaultOptions = options{
+	requestTimeout:  time.Second,
+	responseBackoff: time.Second,
+}
+
+type Option func(*options)
+
+func WithRequestTimeout(value time.Duration) Option {
+	return func(o *options) {
+		o.requestTimeout = value
+	}
+}
+
+func WithResponseBackoff(value time.Duration) Option {
+	return func(o *options) {
+		o.responseBackoff = value
+	}
+}
+
+func WithChangeListener(value ChangeListener) Option {
+	return func(o *options) {
+		o.listener = value
+	}
+}
+
 type ChangeListener func(message.Message)
 
 // RemoteVersionedStore is an implementation of VersionedStore, via a client to a remote
@@ -26,7 +57,7 @@ type RemoteVersionedStore struct {
 	remote *client.Client
 	local  VersionedStore
 
-	listener ChangeListener
+	opts options
 
 	// Keeps track of goroutines waiting for a response in the do method, and the
 	// goroutine running the receive loop. Used to ensure all of those method calls
@@ -38,13 +69,16 @@ type RemoteVersionedStore struct {
 	stopped    bool
 }
 
-func NewRemoteVersionedStore(remote *client.Client, listener ChangeListener) *RemoteVersionedStore {
+func NewRemoteVersionedStore(remote *client.Client, options ...Option) *RemoteVersionedStore {
 	var rs RemoteVersionedStore
 	rs.tags = message.NewMonotoneTags()
 	rs.remote = remote
 	rs.rendezvous = make(map[uint16]chan message.Message)
 	rs.local = NewVersionedWrapper(NewInMemoryStore())
-	rs.listener = listener
+	rs.opts = defaultOptions
+	for _, o := range options {
+		o(&rs.opts)
+	}
 	return &rs
 }
 
@@ -108,7 +142,7 @@ func (rs *RemoteVersionedStore) do(request message.Message) (response message.Me
 	select {
 	case response = <-r:
 		return response, nil
-	case <-time.After(time.Second):
+	case <-time.After(rs.opts.requestTimeout):
 		rs.cancelRendezvous(tag)
 		return response, ErrCancelledRendezvous
 	}
@@ -184,7 +218,7 @@ func (rs *RemoteVersionedStore) receiveLoop() {
 			if stopped {
 				break
 			}
-			time.Sleep(time.Second)
+			time.Sleep(rs.opts.responseBackoff)
 			continue
 		}
 		tag := m.Tag()
@@ -197,8 +231,8 @@ func (rs *RemoteVersionedStore) receiveLoop() {
 				log.WithFields(log.Fields{
 					"err": lres,
 				}).Error("Could not apply locally")
-			} else if rs.listener != nil {
-				rs.listener(lres)
+			} else if rs.opts.listener != nil {
+				rs.opts.listener(lres)
 			}
 		}
 	}
