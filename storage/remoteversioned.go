@@ -13,13 +13,14 @@ import (
 )
 
 var (
-	ErrShutdown = errors.New("shutdown")
+	ErrShutdown            = errors.New("shutdown")
+	ErrCancelledRendezvous = errors.New("request and response did not meet")
 )
 
 type ChangeListener func(message.Message)
 
 // RemoteVersionedStore is an implementation of VersionedStore, via a client to a remote
-// metadata server.
+// metadataserver process.
 type RemoteVersionedStore struct {
 	tags   *message.MonotoneTags
 	remote *client.Client
@@ -32,18 +33,16 @@ type RemoteVersionedStore struct {
 	// return when Shutdown is called.
 	doing sync.WaitGroup
 
-	mu        sync.Mutex
-	received  *sync.Cond
-	responses map[uint16]message.Message
-	stopped   bool
+	mu         sync.Mutex
+	rendezvous map[uint16]chan message.Message
+	stopped    bool
 }
 
 func NewRemoteVersionedStore(remote *client.Client, listener ChangeListener) *RemoteVersionedStore {
 	var rs RemoteVersionedStore
 	rs.tags = message.NewMonotoneTags()
 	rs.remote = remote
-	rs.received = sync.NewCond(&rs.mu)
-	rs.responses = make(map[uint16]message.Message)
+	rs.rendezvous = make(map[uint16]chan message.Message)
 	rs.local = NewVersionedWrapper(NewInMemoryStore())
 	rs.listener = listener
 	return &rs
@@ -58,37 +57,61 @@ func (rs *RemoteVersionedStore) Stop() {
 	rs.stopped = true
 	rs.mu.Unlock()
 
-	// Nothing received, but goroutines waiting on this condition will check the
-	// shutdown flag as well. This stops the receive loop as well.
-	rs.received.Broadcast()
+	// The goroutines waiting for a response will timeout (and return
+	// ErrCancelledRendezvous). The receive loop will fail the receive because
+	// of the connection being closed, and will see the stopped flag is set, and
+	// exit.
+	_ = rs.remote.Close()
 	rs.doing.Wait()
 
 	rs.tags.Stop()
 }
 
+func (rs *RemoteVersionedStore) newRendezvous(tag uint16) chan message.Message {
+	c := make(chan message.Message, 1)
+	rs.mu.Lock()
+	rs.rendezvous[tag] = c
+	rs.mu.Unlock()
+	return c
+}
+
+func (rs *RemoteVersionedStore) doRendezvous(tag uint16, response message.Message) {
+	rs.mu.Lock()
+	c := rs.rendezvous[tag]
+	if c != nil {
+		c <- response
+	} else {
+		log.WithFields(log.Fields{
+			"message": response,
+		}).Debug("Response for no request?")
+	}
+	delete(rs.rendezvous, tag)
+	rs.mu.Unlock()
+}
+
+func (rs *RemoteVersionedStore) cancelRendezvous(tag uint16) {
+	rs.mu.Lock()
+	delete(rs.rendezvous, tag)
+	rs.mu.Unlock()
+}
+
+// do sends a request and waits up to a second for its response.
 func (rs *RemoteVersionedStore) do(request message.Message) (response message.Message, err error) {
 	rs.doing.Add(1)
 	defer rs.doing.Done()
+	tag := request.Tag()
+	r := rs.newRendezvous(tag)
 	if err := rs.remote.Send(request); err != nil {
+		rs.cancelRendezvous(tag)
 		return response, err
 	}
-	var gotResponse bool
-	rs.received.L.Lock()
-	for {
-		if rs.stopped {
-			return response, ErrShutdown
-		}
-		response, gotResponse = rs.responses[request.Tag()]
-		if gotResponse {
-			delete(rs.responses, request.Tag())
-			break
-		}
-		// TODO: What if the response never comes? Got read underflow for instance. Fails a receive and gets stuck.
-		// Coming from a Symlink operation.
-		rs.received.Wait()
+	select {
+	case response = <-r:
+		return response, nil
+	case <-time.After(time.Second):
+		rs.cancelRendezvous(tag)
+		return response, ErrCancelledRendezvous
 	}
-	rs.received.L.Unlock()
-	return response, nil
 }
 
 func (rs *RemoteVersionedStore) Put(version uint64, key []byte, value []byte) (err error) {
@@ -145,39 +168,35 @@ func (rs *RemoteVersionedStore) receiveLoop() {
 	defer rs.doing.Done()
 	for {
 		rs.mu.Lock()
-		shutdown := rs.stopped
+		stopped := rs.stopped
 		rs.mu.Unlock()
-		if shutdown {
+		if stopped {
 			break
 		}
 		var m message.Message
 		if err := rs.remote.Receive(&m); err != nil {
-			// Timeouts can happen, as we're polling for messages.
-			// Report other errors.
-			if !errors.Is(err, client.ErrTimeout) {
-				log.WithFields(log.Fields{
-					"err": err,
-				}).Error("receive error")
-			}
-
-			// TODO We should reconnect perhaps, since we can't synchronize in the stream?
-			// Or perhaps the put can timeout (above) and give syscall.EIO.
-
-			// Should have a back off strategy here.
-			time.Sleep(250 * time.Millisecond)
-			continue
-		} else {
+			log.WithFields(log.Fields{
+				"err": err,
+			}).Error("receive error")
 			rs.mu.Lock()
-			rs.responses[m.Tag()] = m
+			stopped := rs.stopped
 			rs.mu.Unlock()
-			rs.received.Broadcast()
+			if stopped {
+				break
+			}
+			time.Sleep(time.Second)
+			continue
 		}
-		if m.Tag() == 0 && m.Kind() == message.KindPut {
+		tag := m.Tag()
+		if tag != 0 {
+			rs.doRendezvous(tag, m)
+		}
+		if tag == 0 && m.Kind() == message.KindPut {
 			lres := ApplyMessage(rs.local, m)
 			if lres.Kind() == message.KindError {
 				log.WithFields(log.Fields{
 					"err": lres,
-				}).Error("applying locally")
+				}).Error("Could not apply locally")
 			} else if rs.listener != nil {
 				rs.listener(lres)
 			}
