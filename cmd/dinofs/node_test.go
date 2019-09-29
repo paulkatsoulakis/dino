@@ -113,7 +113,7 @@ func TestNodeMetadataRollback(t *testing.T) {
 	})
 	t.Run("Rmdir", func(t *testing.T) {
 		t.Run("adds back removed child directory", func(t *testing.T) {
-			p := filepath.Join(rootdir, "pallina")
+			p := filepath.Join(rootdir, randomName())
 			ok()
 			err := os.Mkdir(p, 0755)
 			if err != nil {
@@ -144,7 +144,7 @@ func TestNodeMetadataRollback(t *testing.T) {
 	})
 	t.Run("Unlink", func(t *testing.T) {
 		t.Run("adds back removed child file", func(t *testing.T) {
-			p := filepath.Join(rootdir, "name")
+			p := filepath.Join(rootdir, randomName())
 			ok()
 			if err := ioutil.WriteFile(p, []byte("Peggy Sue"), 0644); err != nil {
 				t.Fatalf("got %v, want nil", err)
@@ -163,7 +163,7 @@ func TestNodeMetadataRollback(t *testing.T) {
 	})
 	t.Run("Flush", func(t *testing.T) {
 		t.Run("reverts to old data if flush fails", func(t *testing.T) {
-			p := filepath.Join(rootdir, "some file")
+			p := filepath.Join(rootdir, randomName())
 			ok()
 			if err := ioutil.WriteFile(p, []byte("old contents"), 0644); err != nil {
 				t.Fatalf("got %v, want nil", err)
@@ -191,7 +191,7 @@ func TestNodeMetadataRollback(t *testing.T) {
 	})
 	t.Run("Create", func(t *testing.T) {
 		t.Run("removes file just created if child sync fails", func(t *testing.T) {
-			p := filepath.Join(rootdir, "failing-create")
+			p := filepath.Join(rootdir, randomName())
 			ko()
 			f, err := os.Create(p)
 			if err == nil {
@@ -206,7 +206,7 @@ func TestNodeMetadataRollback(t *testing.T) {
 			}
 		})
 		t.Run("removes file just created if parent sync fails", func(t *testing.T) {
-			p := filepath.Join(rootdir, "failing-create")
+			p := filepath.Join(rootdir, randomName())
 			okko()
 			f, err := os.Create(p)
 			if err == nil {
@@ -223,7 +223,7 @@ func TestNodeMetadataRollback(t *testing.T) {
 	})
 	t.Run("Mkdir", func(t *testing.T) {
 		t.Run("removes directory just created if child sync fails", func(t *testing.T) {
-			p := filepath.Join(rootdir, "failing-mkdir")
+			p := filepath.Join(rootdir, randomName())
 			ko()
 			err := os.Mkdir(p, 0755)
 			if err == nil {
@@ -235,7 +235,7 @@ func TestNodeMetadataRollback(t *testing.T) {
 			}
 		})
 		t.Run("removes directory just created if parent sync fails", func(t *testing.T) {
-			p := filepath.Join(rootdir, "failing-mkdir")
+			p := filepath.Join(rootdir, randomName())
 			okko()
 			err := os.Mkdir(p, 0755)
 			if err == nil {
@@ -249,12 +249,12 @@ func TestNodeMetadataRollback(t *testing.T) {
 	})
 	t.Run("Symlink", func(t *testing.T) {
 		t.Run("removes symlink just created if child sync fails", func(t *testing.T) {
-			oldname := filepath.Join(rootdir, "failing symlink-target")
+			oldname := filepath.Join(rootdir, randomName())
 			err := ioutil.WriteFile(oldname, []byte("content"), 0644)
 			if err != nil {
 				t.Fatal(err)
 			}
-			newname := filepath.Join(rootdir, "failing-symlink")
+			newname := filepath.Join(rootdir, randomName())
 			ko()
 			if err := os.Symlink(oldname, newname); err == nil {
 				t.Fatal("got nil, want non-nil")
@@ -265,12 +265,12 @@ func TestNodeMetadataRollback(t *testing.T) {
 			}
 		})
 		t.Run("removes symlink just created if parent sync fails", func(t *testing.T) {
-			oldname := filepath.Join(rootdir, "failing symlink-target")
+			oldname := filepath.Join(rootdir, randomName())
 			err := ioutil.WriteFile(oldname, []byte("content"), 0644)
 			if err != nil {
 				t.Fatal(err)
 			}
-			newname := filepath.Join(rootdir, "failing-symlink")
+			newname := filepath.Join(rootdir, randomName())
 			okko()
 			if err := os.Symlink(oldname, newname); err == nil {
 				t.Fatal("got nil, want non-nil")
