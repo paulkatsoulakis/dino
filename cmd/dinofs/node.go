@@ -291,7 +291,14 @@ func (node *dinoNode) ensureChildLoaded(ctx context.Context, childNode *dinoNode
 func (node *dinoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
 	node.mu.Lock()
 	defer node.mu.Unlock()
-	return node.sync()
+	prev := node.contentKey
+	errno := node.sync()
+	if errno != 0 && !bytes.Equal(prev, node.contentKey) {
+		// Rollback.
+		node.contentKey = prev
+		node.content = nil
+	}
+	return errno
 }
 
 func (node *dinoNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {

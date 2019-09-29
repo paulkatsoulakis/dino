@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io/ioutil"
@@ -149,6 +150,34 @@ func TestNodeMetadataRollback(t *testing.T) {
 				t.Errorf("got %v, want nil", err)
 			} else if string(b) != "Peggy Sue" {
 				t.Errorf("got %q, want %q", b, "Peggy Sue")
+			}
+		})
+	})
+	t.Run("Flush", func(t *testing.T) {
+		t.Run("reverts to old data if flush fails", func(t *testing.T) {
+			p := filepath.Join(rootdir, "some file")
+			ok()
+			if err := ioutil.WriteFile(p, []byte("old contents"), 0644); err != nil {
+				t.Fatalf("got %v, want nil", err)
+			}
+			f, err := os.OpenFile(p, os.O_WRONLY, 0644)
+			if err != nil {
+				t.Fatalf("got %v, want nil", err)
+			}
+			if _, err := f.Write([]byte("new contents")); err != nil {
+				t.Fatalf("got %v, want nil", err)
+			}
+			ko()
+			if err := f.Close(); err == nil {
+				t.Fatalf("got nil, want non-nil")
+			}
+			ok()
+			b, err := ioutil.ReadFile(p)
+			if err != nil {
+				t.Fatalf("got %v, want nil", err)
+			}
+			if !bytes.Equal(b, []byte("old contents")) {
+				t.Errorf("got %q, want %q", b, "old contents")
 			}
 		})
 	})
