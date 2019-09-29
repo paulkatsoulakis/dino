@@ -113,6 +113,25 @@ func TestNodeMetadataRollback(t *testing.T) {
 			}
 		})
 	})
+	t.Run("Unlink", func(t *testing.T) {
+		t.Run("adds back removed child file", func(t *testing.T) {
+			p := filepath.Join(rootdir, "name")
+			ok()
+			if err := ioutil.WriteFile(p, []byte("Peggy Sue"), 0644); err != nil {
+				t.Fatalf("got %v, want nil", err)
+			}
+			ko()
+			if err := os.Remove(p); err == nil {
+				t.Fatal("got nil, want non-nil")
+			}
+			// After remove failure, should still be able to read up the file.
+			if b, err := ioutil.ReadFile(p); err != nil {
+				t.Errorf("got %v, want nil", err)
+			} else if string(b) != "Peggy Sue" {
+				t.Errorf("got %q, want %q", b, "Peggy Sue")
+			}
+		})
+	})
 }
 
 func testMount(t *testing.T) (mountpoint string, factory *dinoNodeFactory, cleanup func()) {

@@ -162,9 +162,15 @@ func (node *dinoNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 func (node *dinoNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	node.mu.Lock()
 	defer node.mu.Unlock()
+	child := node.children[name]
 	delete(node.children, name)
 	node.shouldSaveMetadata = true
-	return node.sync()
+	errno := node.sync()
+	// Rollback.
+	if errno != 0 && child != nil {
+		node.children[name] = child
+	}
+	return errno
 }
 
 // Call with lock held.
@@ -252,25 +258,14 @@ func (node *dinoNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	if errno := node.reloadIfNeeded(); errno != 0 {
 		return nil, errno
 	}
-	if child := node.GetChild(name); child != nil {
-		return child, 0
-	}
-	childNode := node.children[name]
-	if childNode == nil {
+	child := node.children[name]
+	if child == nil {
 		return nil, syscall.ENOENT
 	}
-	if childNode.mode != modeNotLoaded {
-		log.WithFields(log.Fields{
-			"childMode": bitsOf(childNode.mode),
-			"child":     childNode.name,
-			"parent":    node.fullPath(),
-		}).Error("loaded child node in map but not in library")
-		return nil, syscall.ENOENT
-	}
-	if errno := node.ensureChildLoaded(ctx, childNode); errno != 0 {
+	if errno := node.ensureChildLoaded(ctx, child); errno != 0 {
 		return nil, errno
 	}
-	return node.GetChild(name), 0
+	return child.EmbeddedInode(), 0
 }
 
 // Call with lock held.
