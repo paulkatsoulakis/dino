@@ -136,6 +136,14 @@ func (node *dinoNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	node.mu.Lock()
 	defer node.mu.Unlock()
 	child := node.children[name]
+	// go-fuse should know to call into Rmdir only if the child exists.
+	// Since a panic() here would break the mount, let's be defensive anyway.
+	if child == nil {
+		log.WithFields(log.Fields{
+			"name": name,
+		}).Warn("Asked to remove directory that does not exist")
+		return syscall.ENOENT
+	}
 	child.mu.Lock()
 	defer child.mu.Unlock()
 	if len(child.children) != 0 {
@@ -143,7 +151,12 @@ func (node *dinoNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	}
 	delete(node.children, name)
 	node.shouldSaveMetadata = true
-	return node.sync()
+	errno := node.sync()
+	// Rollback.
+	if errno != 0 {
+		node.children[name] = child
+	}
+	return errno
 }
 
 func (node *dinoNode) Unlink(ctx context.Context, name string) syscall.Errno {
