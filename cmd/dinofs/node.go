@@ -317,72 +317,78 @@ func (node *dinoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.At
 	return 0
 }
 
-func (node *dinoNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (child *fs.Inode, fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {
+func (node *dinoNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
 	node.mu.Lock()
 	defer node.mu.Unlock()
-	child, childNode, errno := node.createLockedChild(ctx, name, mode, fuse.S_IFREG)
+	child, rollback, errno := node.createLockedChild(ctx, name, mode, fuse.S_IFREG)
 	if errno != 0 {
 		return nil, nil, 0, errno
 	}
-	defer childNode.mu.Unlock()
-	childNode.shouldSaveMetadata = true
+	defer child.mu.Unlock()
+	child.shouldSaveMetadata = true
+	if errno := child.sync(); errno != 0 {
+		rollback()
+		return nil, nil, 0, errno
+	}
 	node.shouldSaveMetadata = true
-	if errno := childNode.sync(); errno != 0 {
-		return nil, nil, 0, errno
-	}
 	if errno := node.sync(); errno != 0 {
+		rollback()
 		return nil, nil, 0, errno
 	}
-	return child, nil, 0, 0
+	return child.EmbeddedInode(), nil, 0, 0
 }
 
-func (node *dinoNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (child *fs.Inode, errno syscall.Errno) {
+func (node *dinoNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	node.mu.Lock()
 	defer node.mu.Unlock()
-	child, childNode, errno := node.createLockedChild(ctx, name, mode, fuse.S_IFDIR)
+	child, rollback, errno := node.createLockedChild(ctx, name, mode, fuse.S_IFDIR)
 	if errno != 0 {
 		return nil, errno
 	}
-	defer childNode.mu.Unlock()
-	childNode.children = make(map[string]*dinoNode)
-	childNode.shouldSaveMetadata = true
+	defer child.mu.Unlock()
+	child.children = make(map[string]*dinoNode)
+	child.shouldSaveMetadata = true
 	node.shouldSaveMetadata = true
-	if errno := childNode.sync(); errno != 0 {
+	if errno := child.sync(); errno != 0 {
+		rollback()
 		return nil, errno
 	}
 	if errno := node.sync(); errno != 0 {
+		rollback()
 		return nil, errno
 	}
-	return child, 0
+	return child.EmbeddedInode(), 0
 }
 
-func (node *dinoNode) Symlink(ctx context.Context, target, name string, out *fuse.EntryOut) (child *fs.Inode, errno syscall.Errno) {
+func (node *dinoNode) Symlink(ctx context.Context, target, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	node.mu.Lock()
 	defer node.mu.Unlock()
-	child, childNode, errno := node.createLockedChild(ctx, name, 0, fuse.S_IFLNK)
+	child, rollback, errno := node.createLockedChild(ctx, name, 0, fuse.S_IFLNK)
 	if errno != 0 {
 		return nil, errno
 	}
-	defer childNode.mu.Unlock()
-	childNode.shouldSaveContent = true
-	childNode.content = []byte(target)
-	childNode.shouldSaveMetadata = true
+	defer child.mu.Unlock()
+	child.shouldSaveContent = true
+	child.content = []byte(target)
+	child.shouldSaveMetadata = true
 	node.shouldSaveMetadata = true
-	if errno := childNode.sync(); errno != 0 {
+	if errno := child.sync(); errno != 0 {
+		rollback()
 		return nil, errno
 	}
 	if errno := node.sync(); errno != 0 {
+		rollback()
 		return nil, errno
 	}
-	return child, 0
+	return child.EmbeddedInode(), 0
 }
 
-func (node *dinoNode) createLockedChild(ctx context.Context, name string, mode uint32, orMode uint32) (*fs.Inode, *dinoNode, syscall.Errno) {
+func (node *dinoNode) createLockedChild(ctx context.Context, name string, mode uint32, orMode uint32) (child *dinoNode, rollback func(), errno syscall.Errno) {
 	id := fs.StableAttr{
 		Mode: mode | orMode,
 		Ino:  node.factory.inogen.next(),
 	}
-	childNode, err := node.factory.allocNode()
+	child, err := node.factory.allocNode()
 	if err != nil {
 		log.WithFields(log.Fields{
 			"err":    err,
@@ -391,14 +397,16 @@ func (node *dinoNode) createLockedChild(ctx context.Context, name string, mode u
 		}).Error("Create child")
 		return nil, nil, syscall.EIO
 	}
-	childNode.name = name
-	childNode.mode = id.Mode
-	child := node.NewInode(ctx, childNode, id)
-	node.children[name] = childNode
+	child.name = name
+	child.mode = id.Mode
+	node.children[name] = child
 	// Lock before adding to the tree. Caller will unlock.
-	childNode.mu.Lock()
-	node.AddChild(name, child, false)
-	return child, childNode, 0
+	child.mu.Lock()
+	node.AddChild(name, node.NewInode(ctx, child, id), false)
+	return child, func() {
+		node.RmChild(name)
+		delete(node.children, name)
+	}, 0
 }
 
 func (node *dinoNode) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {

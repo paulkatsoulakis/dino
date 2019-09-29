@@ -19,19 +19,30 @@ import (
 )
 
 type fakeVersionedStore struct {
-	mu  sync.Mutex
-	err error
+	mu   sync.Mutex
+	err  error
+	errs []error
 }
 
 func (s *fakeVersionedStore) Get([]byte) (uint64, []byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(s.errs) > 0 {
+		err := s.errs[0]
+		s.errs = s.errs[1:]
+		return 0, nil, err
+	}
 	return 0, nil, s.err
 }
 
 func (s *fakeVersionedStore) Put(uint64, []byte, []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(s.errs) > 0 {
+		err := s.errs[0]
+		s.errs = s.errs[1:]
+		return err
+	}
 	return s.err
 }
 
@@ -39,6 +50,12 @@ func (s *fakeVersionedStore) setErr(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.err = err
+}
+
+func (s *fakeVersionedStore) setErrSequence(errs ...error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.errs = errs
 }
 
 func TestNodeMetadataRollback(t *testing.T) {
@@ -53,6 +70,9 @@ func TestNodeMetadataRollback(t *testing.T) {
 	}
 	ok := func() {
 		factory.metadata.(*fakeVersionedStore).setErr(nil)
+	}
+	okko := func() {
+		factory.metadata.(*fakeVersionedStore).setErrSequence(nil, errors.New("does not compute"))
 	}
 	t.Run("Setxattr", func(t *testing.T) {
 		t.Run("rolls back additions", func(t *testing.T) {
@@ -129,6 +149,98 @@ func TestNodeMetadataRollback(t *testing.T) {
 				t.Errorf("got %v, want nil", err)
 			} else if string(b) != "Peggy Sue" {
 				t.Errorf("got %q, want %q", b, "Peggy Sue")
+			}
+		})
+	})
+	t.Run("Create", func(t *testing.T) {
+		t.Run("removes file just created if child sync fails", func(t *testing.T) {
+			p := filepath.Join(rootdir, "failing-create")
+			ko()
+			f, err := os.Create(p)
+			if err == nil {
+				t.Fatal("got nil, want non-nil")
+			}
+			if f != nil {
+				t.Errorf("got %v, want nil", f)
+			}
+			ok()
+			if _, err := os.Stat(p); !os.IsNotExist(err) {
+				t.Fatalf("got %v, want %v", err, os.ErrNotExist)
+			}
+		})
+		t.Run("removes file just created if parent sync fails", func(t *testing.T) {
+			p := filepath.Join(rootdir, "failing-create")
+			okko()
+			f, err := os.Create(p)
+			if err == nil {
+				t.Fatal("got nil, want non-nil")
+			}
+			if f != nil {
+				t.Errorf("got %v, want nil", f)
+			}
+			ok()
+			if _, err := os.Stat(p); !os.IsNotExist(err) {
+				t.Fatalf("got %v, want %v", err, os.ErrNotExist)
+			}
+		})
+	})
+	t.Run("Mkdir", func(t *testing.T) {
+		t.Run("removes directory just created if child sync fails", func(t *testing.T) {
+			p := filepath.Join(rootdir, "failing-mkdir")
+			ko()
+			err := os.Mkdir(p, 0755)
+			if err == nil {
+				t.Fatal("got nil, want non-nil")
+			}
+			ok()
+			if _, err := os.Stat(p); !os.IsNotExist(err) {
+				t.Fatalf("got %v, want %v", err, os.ErrNotExist)
+			}
+		})
+		t.Run("removes directory just created if parent sync fails", func(t *testing.T) {
+			p := filepath.Join(rootdir, "failing-mkdir")
+			okko()
+			err := os.Mkdir(p, 0755)
+			if err == nil {
+				t.Fatal("got nil, want non-nil")
+			}
+			ok()
+			if _, err := os.Stat(p); !os.IsNotExist(err) {
+				t.Fatalf("got %v, want %v", err, os.ErrNotExist)
+			}
+		})
+	})
+	t.Run("Symlink", func(t *testing.T) {
+		t.Run("removes symlink just created if child sync fails", func(t *testing.T) {
+			oldname := filepath.Join(rootdir, "failing symlink-target")
+			err := ioutil.WriteFile(oldname, []byte("content"), 0644)
+			if err != nil {
+				t.Fatal(err)
+			}
+			newname := filepath.Join(rootdir, "failing-symlink")
+			ko()
+			if err := os.Symlink(oldname, newname); err == nil {
+				t.Fatal("got nil, want non-nil")
+			}
+			ok()
+			if _, err := os.Stat(newname); !os.IsNotExist(err) {
+				t.Fatalf("got %v, want %v", err, os.ErrNotExist)
+			}
+		})
+		t.Run("removes symlink just created if parent sync fails", func(t *testing.T) {
+			oldname := filepath.Join(rootdir, "failing symlink-target")
+			err := ioutil.WriteFile(oldname, []byte("content"), 0644)
+			if err != nil {
+				t.Fatal(err)
+			}
+			newname := filepath.Join(rootdir, "failing-symlink")
+			okko()
+			if err := os.Symlink(oldname, newname); err == nil {
+				t.Fatal("got nil, want non-nil")
+			}
+			ok()
+			if _, err := os.Stat(newname); !os.IsNotExist(err) {
+				t.Fatalf("got %v, want %v", err, os.ErrNotExist)
 			}
 		})
 	})
