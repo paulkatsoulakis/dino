@@ -3,8 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"fmt"
 	"strconv"
 	"sync"
 	"syscall"
@@ -22,33 +20,11 @@ const (
 	modeNotLoaded uint32 = 0xffffffff
 )
 
-// Track discovered nodes by key.
-var (
-	knownNodes = struct {
-		sync.Mutex
-		m map[[nodeKeyLen]byte]*dinoNode
-	}{
-		m: make(map[[nodeKeyLen]byte]*dinoNode),
-	}
-)
-
-func addKnown(node *dinoNode) {
-	knownNodes.Lock()
-	defer knownNodes.Unlock()
-	if _, ok := knownNodes.m[node.key]; ok {
-		return
-	}
-	knownNodes.m[node.key] = node
-	logger := log.WithField("key", fmt.Sprintf("%.10x", node.key[:]))
-	if node.name != "" {
-		logger.WithField("name", node.name).Debug("Discovered node")
-	} else {
-		logger.Debug("Added node")
-	}
-}
-
 type dinoNode struct {
 	fs.Inode
+
+	// Injected by the node factory itself.
+	factory *dinoNodeFactory
 
 	mu sync.Mutex
 
@@ -121,9 +97,19 @@ func (node *dinoNode) Setxattr(ctx context.Context, attr string, data []byte, fl
 			return syscall.ENODATA
 		}
 	}
+	rbdata := node.xattrs[attr]
 	node.xattrs[attr] = append([]byte{}, data...)
 	node.shouldSaveMetadata = true
-	return node.sync()
+	errno := node.sync()
+	// Rollback.
+	if errno != 0 {
+		if rbdata != nil {
+			node.xattrs[attr] = rbdata
+		} else {
+			delete(node.xattrs, attr)
+		}
+	}
+	return errno
 }
 
 // Getxattr should read data for the given attribute into
@@ -150,6 +136,14 @@ func (node *dinoNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	node.mu.Lock()
 	defer node.mu.Unlock()
 	child := node.children[name]
+	// go-fuse should know to call into Rmdir only if the child exists.
+	// Since a panic() here would break the mount, let's be defensive anyway.
+	if child == nil {
+		log.WithFields(log.Fields{
+			"name": name,
+		}).Warn("Asked to remove directory that does not exist")
+		return syscall.ENOENT
+	}
 	child.mu.Lock()
 	defer child.mu.Unlock()
 	if len(child.children) != 0 {
@@ -157,34 +151,31 @@ func (node *dinoNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	}
 	delete(node.children, name)
 	node.shouldSaveMetadata = true
-	return node.sync()
+	errno := node.sync()
+	// Rollback.
+	if errno != 0 {
+		node.children[name] = child
+	}
+	return errno
 }
 
 func (node *dinoNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	node.mu.Lock()
 	defer node.mu.Unlock()
+	child := node.children[name]
 	delete(node.children, name)
 	node.shouldSaveMetadata = true
-	return node.sync()
-}
-
-func allocNode() (*dinoNode, error) {
-	var node dinoNode
-	node.time = time.Now()
-	n, err := rand.Read(node.key[:])
-	if err != nil {
-		return nil, err
+	errno := node.sync()
+	// Rollback.
+	if errno != 0 && child != nil {
+		node.children[name] = child
 	}
-	if n != nodeKeyLen {
-		return nil, fmt.Errorf("could only read %d of %d random bytes", n, nodeKeyLen)
-	}
-	addKnown(&node)
-	return &node, nil
+	return errno
 }
 
 // Call with lock held.
 func (node *dinoNode) fullPath() string {
-	return node.Path(root.EmbeddedInode())
+	return node.Path(node.factory.root.EmbeddedInode())
 }
 
 // Call with lock held.
@@ -193,8 +184,8 @@ func (node *dinoNode) reloadIfNeeded() syscall.Errno {
 		return 0
 	}
 	logger := log.WithField("parent", node.name)
-	var nn dinoNode
-	if err := nn.loadMetadata(metadataStore, node.key); err != nil {
+	nn := &dinoNode{factory: node.factory}
+	if err := nn.loadMetadata(node.key); err != nil {
 		logger.WithField("err", err).Error("Could not reload")
 		return syscall.EIO
 	}
@@ -267,25 +258,14 @@ func (node *dinoNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	if errno := node.reloadIfNeeded(); errno != 0 {
 		return nil, errno
 	}
-	if child := node.GetChild(name); child != nil {
-		return child, 0
-	}
-	childNode := node.children[name]
-	if childNode == nil {
+	child := node.children[name]
+	if child == nil {
 		return nil, syscall.ENOENT
 	}
-	if childNode.mode != modeNotLoaded {
-		log.WithFields(log.Fields{
-			"childMode": bitsOf(childNode.mode),
-			"child":     childNode.name,
-			"parent":    node.fullPath(),
-		}).Error("loaded child node in map but not in library")
-		return nil, syscall.ENOENT
-	}
-	if errno := node.ensureChildLoaded(ctx, childNode); errno != 0 {
+	if errno := node.ensureChildLoaded(ctx, child); errno != 0 {
 		return nil, errno
 	}
-	return node.GetChild(name), 0
+	return child.EmbeddedInode(), 0
 }
 
 // Call with lock held.
@@ -293,7 +273,7 @@ func (node *dinoNode) ensureChildLoaded(ctx context.Context, childNode *dinoNode
 	if childNode.mode != modeNotLoaded {
 		return 0
 	}
-	if err := childNode.loadMetadata(metadataStore, childNode.key); err != nil {
+	if err := childNode.loadMetadata(childNode.key); err != nil {
 		log.WithFields(log.Fields{
 			"err":    err,
 			"child":  childNode.name,
@@ -301,10 +281,9 @@ func (node *dinoNode) ensureChildLoaded(ctx context.Context, childNode *dinoNode
 		}).Error("could not load metadata")
 		return syscall.EIO
 	}
-	addKnown(childNode)
 	node.AddChild(childNode.name, node.NewInode(ctx, childNode, fs.StableAttr{
 		Mode: childNode.mode,
-		Ino:  nextInodeNumber(),
+		Ino:  node.factory.inogen.next(),
 	}), false)
 	return 0
 }
@@ -312,7 +291,14 @@ func (node *dinoNode) ensureChildLoaded(ctx context.Context, childNode *dinoNode
 func (node *dinoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
 	node.mu.Lock()
 	defer node.mu.Unlock()
-	return node.sync()
+	prev := node.contentKey
+	errno := node.sync()
+	if errno != 0 && !bytes.Equal(prev, node.contentKey) {
+		// Rollback.
+		node.contentKey = prev
+		node.content = nil
+	}
+	return errno
 }
 
 func (node *dinoNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
@@ -333,77 +319,84 @@ func (node *dinoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.At
 	out.Uid = node.user
 	out.Gid = node.group
 	out.Mode = node.mode
+	out.Atime = uint64(node.time.Unix())
 	out.Mtime = uint64(node.time.Unix())
 	out.Size = uint64(len(node.content))
 	return 0
 }
 
-func (node *dinoNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (child *fs.Inode, fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {
+func (node *dinoNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
 	node.mu.Lock()
 	defer node.mu.Unlock()
-	child, childNode, errno := node.createLockedChild(ctx, name, mode, fuse.S_IFREG)
+	child, rollback, errno := node.createLockedChild(ctx, name, mode, fuse.S_IFREG)
 	if errno != 0 {
 		return nil, nil, 0, errno
 	}
-	defer childNode.mu.Unlock()
-	childNode.shouldSaveMetadata = true
+	defer child.mu.Unlock()
+	child.shouldSaveMetadata = true
+	if errno := child.sync(); errno != 0 {
+		rollback()
+		return nil, nil, 0, errno
+	}
 	node.shouldSaveMetadata = true
-	if errno := childNode.sync(); errno != 0 {
-		return nil, nil, 0, errno
-	}
 	if errno := node.sync(); errno != 0 {
+		rollback()
 		return nil, nil, 0, errno
 	}
-	return child, nil, 0, 0
+	return child.EmbeddedInode(), nil, 0, 0
 }
 
-func (node *dinoNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (child *fs.Inode, errno syscall.Errno) {
+func (node *dinoNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	node.mu.Lock()
 	defer node.mu.Unlock()
-	child, childNode, errno := node.createLockedChild(ctx, name, mode, fuse.S_IFDIR)
+	child, rollback, errno := node.createLockedChild(ctx, name, mode, fuse.S_IFDIR)
 	if errno != 0 {
 		return nil, errno
 	}
-	defer childNode.mu.Unlock()
-	childNode.children = make(map[string]*dinoNode)
-	childNode.shouldSaveMetadata = true
+	defer child.mu.Unlock()
+	child.children = make(map[string]*dinoNode)
+	child.shouldSaveMetadata = true
 	node.shouldSaveMetadata = true
-	if errno := childNode.sync(); errno != 0 {
+	if errno := child.sync(); errno != 0 {
+		rollback()
 		return nil, errno
 	}
 	if errno := node.sync(); errno != 0 {
+		rollback()
 		return nil, errno
 	}
-	return child, 0
+	return child.EmbeddedInode(), 0
 }
 
-func (node *dinoNode) Symlink(ctx context.Context, target, name string, out *fuse.EntryOut) (child *fs.Inode, errno syscall.Errno) {
+func (node *dinoNode) Symlink(ctx context.Context, target, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	node.mu.Lock()
 	defer node.mu.Unlock()
-	child, childNode, errno := node.createLockedChild(ctx, name, 0, fuse.S_IFLNK)
+	child, rollback, errno := node.createLockedChild(ctx, name, 0, fuse.S_IFLNK)
 	if errno != 0 {
 		return nil, errno
 	}
-	defer childNode.mu.Unlock()
-	childNode.shouldSaveContent = true
-	childNode.content = []byte(target)
-	childNode.shouldSaveMetadata = true
+	defer child.mu.Unlock()
+	child.shouldSaveContent = true
+	child.content = []byte(target)
+	child.shouldSaveMetadata = true
 	node.shouldSaveMetadata = true
-	if errno := childNode.sync(); errno != 0 {
+	if errno := child.sync(); errno != 0 {
+		rollback()
 		return nil, errno
 	}
 	if errno := node.sync(); errno != 0 {
+		rollback()
 		return nil, errno
 	}
-	return child, 0
+	return child.EmbeddedInode(), 0
 }
 
-func (node *dinoNode) createLockedChild(ctx context.Context, name string, mode uint32, orMode uint32) (*fs.Inode, *dinoNode, syscall.Errno) {
+func (node *dinoNode) createLockedChild(ctx context.Context, name string, mode uint32, orMode uint32) (child *dinoNode, rollback func(), errno syscall.Errno) {
 	id := fs.StableAttr{
 		Mode: mode | orMode,
-		Ino:  nextInodeNumber(),
+		Ino:  node.factory.inogen.next(),
 	}
-	childNode, err := allocNode()
+	child, err := node.factory.allocNode()
 	if err != nil {
 		log.WithFields(log.Fields{
 			"err":    err,
@@ -412,14 +405,16 @@ func (node *dinoNode) createLockedChild(ctx context.Context, name string, mode u
 		}).Error("Create child")
 		return nil, nil, syscall.EIO
 	}
-	childNode.name = name
-	childNode.mode = id.Mode
-	child := node.NewInode(ctx, childNode, id)
-	node.children[name] = childNode
+	child.name = name
+	child.mode = id.Mode
+	node.children[name] = child
 	// Lock before adding to the tree. Caller will unlock.
-	childNode.mu.Lock()
-	node.AddChild(name, child, false)
-	return child, childNode, 0
+	child.mu.Lock()
+	node.AddChild(name, node.NewInode(ctx, child, id), false)
+	return child, func() {
+		node.RmChild(name)
+		delete(node.children, name)
+	}, 0
 }
 
 func (node *dinoNode) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {
@@ -447,7 +442,7 @@ func (node *dinoNode) ensureContentLoaded() syscall.Errno {
 	if len(node.content) != 0 {
 		return 0
 	}
-	value, err := blobStore.Get(node.contentKey)
+	value, err := node.factory.blobs.Get(node.contentKey)
 	if err != nil {
 		logger.WithField("err", err).Error("Could not load content")
 		return syscall.EIO
@@ -506,7 +501,8 @@ func (node *dinoNode) Rename(ctx context.Context, name string, newParent fs.Inod
 	return 0
 }
 
-func (node *dinoNode) resize(size uint64) {
+func (node *dinoNode) resize(size uint64) (previous []byte) {
+	previous = node.content
 	if size > uint64(cap(node.content)) {
 		larger := make([]byte, size)
 		copy(larger, node.content)
@@ -514,18 +510,32 @@ func (node *dinoNode) resize(size uint64) {
 	} else {
 		node.content = node.content[:size]
 	}
+	return previous
 }
 
 func (node *dinoNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	node.mu.Lock()
 	defer node.mu.Unlock()
+	var rbtime *time.Time
+	var rbuser *uint32
+	var rbgroup *uint32
+	var rbmode *uint32
+	var rbsize *int
+	var rbcontent []byte
+
 	if t, ok := in.GetMTime(); ok {
+		rbtime = new(time.Time)
+		*rbtime = node.time
 		node.time = t
 	}
 	if uid, ok := in.GetUID(); ok {
+		rbuser = new(uint32)
+		*rbuser = node.user
 		node.user = uid
 	}
 	if gid, ok := in.GetGID(); ok {
+		rbgroup = new(uint32)
+		*rbgroup = node.group
 		node.group = gid
 	}
 	if mode, ok := in.GetMode(); ok {
@@ -535,15 +545,38 @@ func (node *dinoNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.Set
 			"old":       bitsOf(node.mode),
 			"new":       bitsOf(node.mode&0xfffff000 | mode&0x00000fff),
 		}).Debug("mode change")
+		rbmode = new(uint32)
+		*rbmode = node.mode
 		node.mode = node.mode&0xfffff000 | mode&0x00000fff
 	}
 	if size, ok := in.GetSize(); ok {
-		node.resize(size)
+		rbsize = new(int)
+		*rbsize = len(node.content)
+		rbcontent = node.resize(size)
 		node.time = time.Now()
 		node.shouldSaveContent = true
 	}
 	node.shouldSaveMetadata = true
-	return node.sync()
+	errno := node.sync()
+	if errno != 0 {
+		// Rollback.
+		if rbtime != nil {
+			node.time = *rbtime
+		}
+		if rbuser != nil {
+			node.user = *rbuser
+		}
+		if rbgroup != nil {
+			node.group = *rbgroup
+		}
+		if rbmode != nil {
+			node.mode = *rbmode
+		}
+		if rbsize != nil {
+			node.content = rbcontent
+		}
+	}
+	return errno
 }
 
 func bitsOf(mode uint32) string {

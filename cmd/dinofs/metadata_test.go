@@ -6,22 +6,26 @@ import (
 	"time"
 
 	"github.com/nicolagi/dino/message"
-
 	"github.com/nicolagi/dino/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNodeSerialization(t *testing.T) {
+	g := newInodeNumbersGenerator()
+	go g.start()
+	defer g.stop()
 	rand.Seed(time.Now().UnixNano())
 	store := storage.NewInMemoryStore()
 	versioned := storage.NewVersionedWrapper(store)
+	factory := &dinoNodeFactory{inogen: g, metadata: versioned}
 	for i := 0; i < 100; i++ {
-		before := randomNode(t)
-		err := before.saveMetadata(versioned)
+		before := randomNode(t, factory)
+		err := before.saveMetadata()
 		require.Nil(t, err)
-		var after dinoNode
-		err = after.loadMetadata(versioned, before.key)
+		after, err := factory.allocNode()
+		require.Nil(t, err)
+		err = after.loadMetadata(before.key)
 		require.Nil(t, err)
 		assert.Equal(t, before.user, after.user)
 		assert.Equal(t, before.group, after.group)
@@ -33,8 +37,8 @@ func TestNodeSerialization(t *testing.T) {
 	}
 }
 
-func randomNode(t *testing.T) *dinoNode {
-	node, err := allocNode()
+func randomNode(t *testing.T, factory *dinoNodeFactory) *dinoNode {
+	node, err := factory.allocNode()
 	require.Nil(t, err)
 	node.user = rand.Uint32()
 	node.group = rand.Uint32()

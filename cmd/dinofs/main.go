@@ -16,15 +16,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-var (
-	// The root node is global so that nodes can compute their full path.
-	root dinoNode
-
-	// The metadata and blob store are global so all nodes can use them.
-	metadataStore storage.VersionedStore
-	blobStore     *storage.BlobStoreWrapper
-)
-
 func main() {
 	defaultConfigFile := os.ExpandEnv("$HOME/lib/dino/dinofs.config")
 	configFile := flag.String("config", defaultConfigFile, "location of configuration file")
@@ -54,17 +45,23 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	rvs := storage.NewRemoteVersionedStore(remoteClient, importMetadata)
+
+	var factory dinoNodeFactory
+
+	rvs := storage.NewRemoteVersionedStore(remoteClient, factory.invalidateCache)
 	rvs.Start()
-	metadataStore = rvs
+	factory.metadata = rvs
 
 	pairedStore := storage.NewPaired(
 		storage.NewDiskStore(os.ExpandEnv(config.DataPath)),
 		storage.NewRemoteStore(config.BlobServer),
 	)
-	blobStore = storage.NewBlobStore(pairedStore)
+	factory.blobs = storage.NewBlobStore(pairedStore)
 
-	generateInodeNumbers()
+	g := newInodeNumbersGenerator()
+	go g.start()
+	defer g.stop()
+	factory.inogen = g
 
 	var fsopts fs.Options
 	fsopts.Debug = config.DebugFUSE
@@ -72,8 +69,10 @@ func main() {
 	fsopts.GID = uint32(os.Getgid())
 	fsopts.FsName = config.Name
 	fsopts.Name = "dinofs"
-	root.name = "root"
-	if err := root.loadMetadata(metadataStore, root.key); err != nil {
+	var rootKey [nodeKeyLen]byte
+	root := factory.existingNode("root", rootKey)
+	factory.root = root
+	if err := root.loadMetadata(root.key); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			log.Infof("Serving an empty file system (no metadata found for root node)")
 			root.mode |= fuse.S_IFDIR
@@ -84,12 +83,10 @@ func main() {
 	}
 
 	mount := os.ExpandEnv(config.Mountpoint)
-	server, err := fs.Mount(mount, &root, &fsopts)
+	server, err := fs.Mount(mount, root, &fsopts)
 	if err != nil {
 		log.Fatalf("Could not mount on %q: %v", mount, err)
 	}
-
-	addKnown(&root)
 
 	// The following call returns when the filesystem is unmounted (e.g.,
 	// with "fusermount -u /n/dino").

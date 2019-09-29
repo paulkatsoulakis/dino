@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"bytes"
 	"errors"
 	"io/ioutil"
 	"math/rand"
@@ -155,6 +156,21 @@ func testStore(t *testing.T, store storage.Store) {
 		value, err := store.Get(key)
 		assert.Nil(t, err)
 		assert.Equal(t, []byte{}, value)
+	})
+	t.Run("mutating value should not affect stored pairs", func(t *testing.T) {
+		key := randomKey()
+		before := []byte("old value")
+		if err := store.Put(key, before); err != nil {
+			t.Fatalf("got %v, want nil", err)
+		}
+		copy(before, "new")
+		after, err := store.Get(key)
+		if err != nil {
+			t.Fatalf("got %v, want nil", err)
+		}
+		if want := []byte("old value"); !bytes.Equal(want, after) {
+			t.Errorf("got %q, want %q", after, want)
+		}
 	})
 	t.Run("corresponding versioned store", func(t *testing.T) {
 		vs := storage.NewVersionedWrapper(store)
