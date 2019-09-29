@@ -319,6 +319,7 @@ func (node *dinoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.At
 	out.Uid = node.user
 	out.Gid = node.group
 	out.Mode = node.mode
+	out.Atime = uint64(node.time.Unix())
 	out.Mtime = uint64(node.time.Unix())
 	out.Size = uint64(len(node.content))
 	return 0
@@ -500,7 +501,8 @@ func (node *dinoNode) Rename(ctx context.Context, name string, newParent fs.Inod
 	return 0
 }
 
-func (node *dinoNode) resize(size uint64) {
+func (node *dinoNode) resize(size uint64) (previous []byte) {
+	previous = node.content
 	if size > uint64(cap(node.content)) {
 		larger := make([]byte, size)
 		copy(larger, node.content)
@@ -508,18 +510,32 @@ func (node *dinoNode) resize(size uint64) {
 	} else {
 		node.content = node.content[:size]
 	}
+	return previous
 }
 
 func (node *dinoNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	node.mu.Lock()
 	defer node.mu.Unlock()
+	var rbtime *time.Time
+	var rbuser *uint32
+	var rbgroup *uint32
+	var rbmode *uint32
+	var rbsize *int
+	var rbcontent []byte
+
 	if t, ok := in.GetMTime(); ok {
+		rbtime = new(time.Time)
+		*rbtime = node.time
 		node.time = t
 	}
 	if uid, ok := in.GetUID(); ok {
+		rbuser = new(uint32)
+		*rbuser = node.user
 		node.user = uid
 	}
 	if gid, ok := in.GetGID(); ok {
+		rbgroup = new(uint32)
+		*rbgroup = node.group
 		node.group = gid
 	}
 	if mode, ok := in.GetMode(); ok {
@@ -529,15 +545,38 @@ func (node *dinoNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.Set
 			"old":       bitsOf(node.mode),
 			"new":       bitsOf(node.mode&0xfffff000 | mode&0x00000fff),
 		}).Debug("mode change")
+		rbmode = new(uint32)
+		*rbmode = node.mode
 		node.mode = node.mode&0xfffff000 | mode&0x00000fff
 	}
 	if size, ok := in.GetSize(); ok {
-		node.resize(size)
+		rbsize = new(int)
+		*rbsize = len(node.content)
+		rbcontent = node.resize(size)
 		node.time = time.Now()
 		node.shouldSaveContent = true
 	}
 	node.shouldSaveMetadata = true
-	return node.sync()
+	errno := node.sync()
+	if errno != 0 {
+		// Rollback.
+		if rbtime != nil {
+			node.time = *rbtime
+		}
+		if rbuser != nil {
+			node.user = *rbuser
+		}
+		if rbgroup != nil {
+			node.group = *rbgroup
+		}
+		if rbmode != nil {
+			node.mode = *rbmode
+		}
+		if rbsize != nil {
+			node.content = rbcontent
+		}
+	}
+	return errno
 }
 
 func bitsOf(mode uint32) string {

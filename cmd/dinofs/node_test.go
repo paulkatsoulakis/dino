@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/google/gops/agent"
 	"github.com/hanwen/go-fuse/v2/fs"
@@ -74,6 +77,11 @@ func TestNodeMetadataRollback(t *testing.T) {
 	}
 	okko := func() {
 		factory.metadata.(*fakeVersionedStore).setErrSequence(nil, errors.New("does not compute"))
+	}
+	randomName := func() string {
+		name := make([]byte, 16)
+		rand.Read(name)
+		return fmt.Sprintf("%x", name)
 	}
 	t.Run("Setxattr", func(t *testing.T) {
 		t.Run("rolls back additions", func(t *testing.T) {
@@ -270,6 +278,120 @@ func TestNodeMetadataRollback(t *testing.T) {
 			ok()
 			if _, err := os.Stat(newname); !os.IsNotExist(err) {
 				t.Fatalf("got %v, want %v", err, os.ErrNotExist)
+			}
+		})
+	})
+	t.Run("Rename", func(t *testing.T) {
+		t.Skip("To be able to rollback renaming, we need transactions on the metadataserver.")
+	})
+	t.Run("Setattr", func(t *testing.T) {
+		t.Run("rolls back time change", func(t *testing.T) {
+			p := filepath.Join(rootdir, randomName())
+			ok()
+			if err := ioutil.WriteFile(p, []byte("anything"), 0644); err != nil {
+				t.Fatalf("got %v, want nil", err)
+			}
+			newTime := time.Unix(123456789, 0)
+			ko()
+			if err := os.Chtimes(p, newTime, newTime); err == nil {
+				t.Fatalf("got nil, want non-nil")
+			}
+			fi, err := os.Stat(p)
+			if err != nil {
+				t.Fatalf("got %v, want nil", err)
+			}
+			if fi.ModTime().Equal(newTime) {
+				t.Errorf("got %v, want anything else", newTime)
+			}
+		})
+		t.Run("rolls back owner change", func(t *testing.T) {
+			p := filepath.Join(rootdir, randomName())
+			ok()
+			if err := ioutil.WriteFile(p, []byte("anything"), 0644); err != nil {
+				t.Fatalf("got %v, want nil", err)
+			}
+			ko()
+			if err := os.Chown(p, 42, -1); err == nil {
+				t.Fatalf("got nil, want non-nil")
+			}
+			fi, err := os.Stat(p)
+			if err != nil {
+				t.Fatalf("got %v, want nil", err)
+			}
+			if got := fi.Sys().(*syscall.Stat_t).Uid; got == 42 {
+				t.Errorf("got %v, want != 42", got)
+			}
+		})
+		t.Run("rolls back group change", func(t *testing.T) {
+			p := filepath.Join(rootdir, randomName())
+			ok()
+			if err := ioutil.WriteFile(p, []byte("anything"), 0644); err != nil {
+				t.Fatalf("got %v, want nil", err)
+			}
+			ko()
+			if err := os.Chown(p, -1, 42); err == nil {
+				t.Fatalf("got nil, want non-nil")
+			}
+			fi, err := os.Stat(p)
+			if err != nil {
+				t.Fatalf("got %v, want nil", err)
+			}
+			if got := fi.Sys().(*syscall.Stat_t).Gid; got == 42 {
+				t.Errorf("got %v, want != 42", got)
+			}
+		})
+		t.Run("rolls back mode change", func(t *testing.T) {
+			p := filepath.Join(rootdir, randomName())
+			ok()
+			if err := ioutil.WriteFile(p, []byte("anything"), 0644); err != nil {
+				t.Fatalf("got %v, want nil", err)
+			}
+			ko()
+			if err := os.Chmod(p, 0111); err == nil {
+				t.Fatalf("got nil, want non-nil")
+			}
+			fi, err := os.Stat(p)
+			if err != nil {
+				t.Fatalf("got %v, want nil", err)
+			}
+			if got := fi.Mode(); got == 0111 {
+				t.Errorf("got %v, want != 0111", got)
+			}
+		})
+		t.Run("rolls back to smaller buffer", func(t *testing.T) {
+			p := filepath.Join(rootdir, randomName())
+			ok()
+			if err := ioutil.WriteFile(p, []byte("anything"), 0644); err != nil {
+				t.Fatalf("got %v, want nil", err)
+			}
+			ko()
+			if err := os.Truncate(p, 3); err == nil {
+				t.Fatalf("got nil, want non-nil")
+			}
+			got, err := ioutil.ReadFile(p)
+			if err != nil {
+				t.Fatalf("got %v, want nil", err)
+			}
+			if !bytes.Equal(got, []byte("anything")) {
+				t.Errorf("got %v, want %q", got, "anything")
+			}
+		})
+		t.Run("rolls back to larger buffer", func(t *testing.T) {
+			p := filepath.Join(rootdir, randomName())
+			ok()
+			if err := ioutil.WriteFile(p, []byte("anything"), 0644); err != nil {
+				t.Fatalf("got %v, want nil", err)
+			}
+			ko()
+			if err := os.Truncate(p, 42); err == nil {
+				t.Fatalf("got nil, want non-nil")
+			}
+			got, err := ioutil.ReadFile(p)
+			if err != nil {
+				t.Fatalf("got %v, want nil", err)
+			}
+			if !bytes.Equal(got, []byte("anything")) {
+				t.Errorf("got %v, want %q", got, "anything")
 			}
 		})
 	})
