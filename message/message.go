@@ -6,6 +6,7 @@ import (
 	"unicode"
 )
 
+// Kind is a number representing the kind of a message—get, put, or error.
 type Kind uint8
 
 const (
@@ -86,22 +87,28 @@ func repr(any string) string {
 	return any
 }
 
-// String implements fmt.Stringer. Note that the fmt package will try to call
-// Error() first (and panic if it's not an error message). Should perhaps not
-// make Message implement error.
+// String implements fmt.Stringer. Keys and values will be printed in hex form
+// if they contain any non-printable character. Also, they will be clipped at 10
+// runes (not necessarily 10 bytes).
 func (m Message) String() string {
 	return fmt.Sprintf("kind=%v tag=%d key=%s value=%s version=%d",
 		m.kind, m.tag, repr(m.key), repr(m.value), m.version)
 }
 
+// Kind returns the kind of a message, which should inform how the message
+// should be used.
 func (m Message) Kind() Kind {
 	return m.kind
 }
 
+// Tag returns the tag of a message (call for all message kinds). Used to
+// correlate requests with responses.
 func (m Message) Tag() uint16 {
 	return m.tag
 }
 
+// Key returns a key-value pair's key from the message. Call only for
+// KindGet and KindPut, else it'll panic.
 func (m Message) Key() string {
 	switch m.kind {
 	case KindGet, KindPut:
@@ -111,6 +118,8 @@ func (m Message) Key() string {
 	}
 }
 
+// Value returns a key-value pair's value from the message. Call only for
+// KindError and KindPut, else it'll panic.
 func (m Message) Value() string {
 	switch m.kind {
 	case KindError, KindPut:
@@ -120,6 +129,8 @@ func (m Message) Value() string {
 	}
 }
 
+// Version returns the version of a key-value pair. Call only for KindPut
+// messages, or it'll panic.
 func (m Message) Version() uint64 {
 	switch m.kind {
 	case KindPut:
@@ -133,6 +144,7 @@ func (m Message) accessorPanic(accessorName string) string {
 	return fmt.Sprintf("cannot call .%s for message of kind %v", accessorName, m.kind)
 }
 
+// NewGetMessage constructs a message of KindGet kind.
 func NewGetMessage(tag uint16, key string) Message {
 	return Message{
 		kind: KindGet,
@@ -141,6 +153,7 @@ func NewGetMessage(tag uint16, key string) Message {
 	}
 }
 
+// NewPutMessage constructs a message of KindPut kind.
 func NewPutMessage(tag uint16, key string, value string, version uint64) Message {
 	return Message{
 		kind:    KindPut,
@@ -151,6 +164,7 @@ func NewPutMessage(tag uint16, key string, value string, version uint64) Message
 	}
 }
 
+// NewErrorMessage constructs a message of KindError kind.
 func NewErrorMessage(tag uint16, message string) Message {
 	return Message{
 		kind:  KindError,
@@ -159,7 +173,7 @@ func NewErrorMessage(tag uint16, message string) Message {
 	}
 }
 
-// ForBroadcast returns a copy of the message that's suitable to be broadcast to
+// ForBroadcast returns a copy of the message that's suitable to be broadcasted to
 // many connections.
 func (m Message) ForBroadcast() Message {
 	if m.kind != KindPut {
@@ -169,10 +183,12 @@ func (m Message) ForBroadcast() Message {
 	return m
 }
 
+// RandomTag is a test helper.
 func RandomTag() uint16 {
 	return uint16(rand.Int() % 65536)
 }
 
+// RandomBytes is a test helper.
 func RandomBytes() []byte {
 	size := rand.Int() % 64
 	key := make([]byte, size)
@@ -180,10 +196,12 @@ func RandomBytes() []byte {
 	return key
 }
 
+// RandomString is a test helper.
 func RandomString() string {
 	return string(RandomBytes())
 }
 
+// RandomVersion is a test helper.
 func RandomVersion() uint64 {
 	return rand.Uint64()
 }

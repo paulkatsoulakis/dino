@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/nicolagi/dino/bits"
 )
@@ -19,12 +20,21 @@ var (
 	ErrBadMessage = errors.New("bad message")
 )
 
+// Encoder is responsible for encoding any message to any writer (e.g., a
+// network connection, a file, a byte buffer...).
 type Encoder struct {
+	sync.Mutex
 	buf []byte
 	off int
 }
 
+// Encode serializes the given message to the given writer, typically a network
+// connection. Concurrent calls to Encode will be serialized, to preserve
+// internal state of the Encoder, but it is up to the client to serialize access
+// to the writer as necessary.
 func (e *Encoder) Encode(w io.Writer, m Message) error {
+	e.Lock()
+	defer e.Unlock()
 	e.off = 0
 	e.makeroom(3)
 	e.put8(uint8(m.kind))
@@ -83,7 +93,10 @@ func (e *Encoder) puts(v string) {
 	e.off += 2 + len(v)
 }
 
+// Decoder is responsible for deserializing message from any reader (bytes to
+// structs).
 type Decoder struct {
+	sync.Mutex
 	buf []byte
 	off int
 
@@ -92,7 +105,13 @@ type Decoder struct {
 	err error
 }
 
+// Decode deserializes bytes from the given reader into the given message. It
+// will return the first read error encountered in the process, if any. It will
+// internally serialize concurrent calls, while the client should serialize
+// access to the reader as necessary.
 func (d *Decoder) Decode(r io.Reader, m *Message) error {
+	d.Lock()
+	defer d.Unlock()
 	d.err = nil
 	d.read(r, 5)
 	m.kind = Kind(d.get8())
