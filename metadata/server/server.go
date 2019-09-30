@@ -109,27 +109,24 @@ func (s *Server) broadcast(excluded uint16, m message.Message) {
 		if excluded == conn.id {
 			continue
 		}
-		log.WithFields(log.Fields{
-			"message":   m.String(),
+		logger := log.WithFields(log.Fields{
+			"message":   broadcastMessage,
 			"sender":    excluded,
 			"recipient": conn.id,
-		}).Debug("Notifying")
+			"local":     conn.conn.LocalAddr(),
+			"remote":    conn.conn.RemoteAddr(),
+		})
 		// Note: We're re-encoding for all conns, that's a waste.
 		// This calls for a refactoring.
-		conn.emu.Lock()
 		err := conn.encoder.Encode(conn.conn, broadcastMessage)
-		conn.emu.Unlock()
 		if err != nil {
 			// Never mind if a client didn't get the message. They are simply more likely
 			// to send stale puts as a consequence of the missed update. They would also
 			// see potentially stale content. Note: We should probably have a retry
 			// queue.
-			log.WithFields(log.Fields{
-				"err":       err,
-				"message":   m.String(),
-				"sender":    excluded,
-				"recipient": conn.id,
-			}).Warn("Could not notify")
+			logger.WithField("err", err).Warn("Could not notify")
+		} else {
+			logger.Debug("Notified")
 		}
 	}
 }

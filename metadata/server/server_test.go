@@ -1,7 +1,7 @@
 package server_test
 
 import (
-	"errors"
+	"bytes"
 	"testing"
 	"time"
 
@@ -21,7 +21,7 @@ func TestServer(t *testing.T) {
 	t.Run("send error message", func(t *testing.T) {
 		address, cleanup := newDisposableServer(t)
 		defer cleanup()
-		c := newAttachedClient(t, address)
+		c := newAttachedClient(address)
 		request := message.NewErrorMessage(431, "test error")
 		assert.Nil(t, c.Send(request))
 		var response message.Message
@@ -34,12 +34,12 @@ func TestServer(t *testing.T) {
 		defer cleanup()
 
 		// Connect two clients.
-		c1 := newAttachedClient(t, address)
-		c2 := newAttachedClient(t, address)
+		c1 := newAttachedClient(address)
+		c2 := newAttachedClient(address)
 
 		// Close c2, then send a put via c1.
 		// This would attempt a notification on c2.
-		require.Nil(t, c2.Close())
+		c2.Close()
 		req1 := message.NewPutMessage(1, "genre", "jazz", 1)
 		require.Nil(t, c1.Send(req1))
 
@@ -54,107 +54,77 @@ func TestServer(t *testing.T) {
 		defer cleanup()
 
 		// Send conflicting puts from two clients.
-		client1 := newAttachedClient(t, address)
-		client2 := newAttachedClient(t, address)
-		req1 := message.NewPutMessage(42, "name", "Alberto", 0)
-		req2 := message.NewPutMessage(42, "name", "Leonardo", 0)
-		require.Nil(t, client1.Send(req1))
-		require.Nil(t, client2.Send(req2))
+		client1, _ := newRemoteVersionedStore(address)
+		client2, _ := newRemoteVersionedStore(address)
+		err1 := client1.Put(1, []byte("name"), []byte("Alberto"))
+		err2 := client2.Put(1, []byte("name"), []byte("Leonardo"))
 
-		var res11, res12, res21, res22 message.Message
-		err11 := client1.Receive(&res11)
-		err12 := client1.Receive(&res12)
-		err21 := client2.Receive(&res21)
-		err22 := client2.Receive(&res22)
-
-		// If the second response for client1 timed out, it means client1 did
-		// the succesful put. If not, swap everything, so we can write
-		// assertions more easily.
-		if !errors.Is(err12, client.ErrTimeout) {
-			err11, err12, err21, err22 = err21, err22, err11, err12
-			res11, res12, res21, res22 = res21, res22, res11, res12
-			req1, req2 = req2, req1
+		var winner []byte
+		if err1 != nil {
+			assert.Equal(t, err1, storage.ErrStalePut)
+			assert.Nil(t, err2)
+			winner = []byte("Leonardo")
+		} else {
+			assert.Equal(t, err2, storage.ErrStalePut)
+			winner = []byte("Alberto")
 		}
 
-		require.Nil(t, err11)
-		require.True(t, errors.Is(err12, client.ErrTimeout))
-		require.Nil(t, err21)
-		require.Nil(t, err22)
-
-		assert.Equal(t, req1, res11)
-
-		// Not sure if client2 got the broadcast message or the response first.
-		if res21.Kind() != message.KindError {
-			res21, res22 = res22, res21
-		}
-
-		// Stale put
-		assert.Equal(t, message.KindError, res21.Kind())
-		assert.Equal(t, "stale put", res21.Value())
-		// Broadcast
-		assert.EqualValues(t, 0, res22.Tag())
-		assert.Equal(t, message.KindPut, res22.Kind())
+		version1, value1, err1 := client1.Get([]byte("name"))
+		version2, value2, err2 := client2.Get([]byte("name"))
+		assert.Nil(t, err1)
+		assert.Nil(t, err2)
+		assert.EqualValues(t, 1, version1)
+		assert.EqualValues(t, 1, version2)
+		assert.Equal(t, winner, value1)
+		assert.Equal(t, winner, value2)
 	})
 	t.Run("one client puts, another one gets", func(t *testing.T) {
 		address, cleanup := newDisposableServer(t)
 		defer cleanup()
 
 		// Use one client to connect and put a key.
-		c1 := newAttachedClient(t, address)
-		req1 := message.NewPutMessage(1, "username", "glenda", 1)
-		require.Nil(t, c1.Send(req1))
-		var res1 message.Message
-		require.Nil(t, c1.Receive(&res1))
-		assert.Equal(t, req1, res1)
+		vs1, _ := newRemoteVersionedStore(address)
+		err := vs1.Put(1, []byte("username"), []byte("glenda"))
+		require.Nil(t, err)
 
 		// Connect a new client, get, receive what was put by first client.
-		c2 := newAttachedClient(t, address)
-		require.Nil(t, c2.Send(message.NewGetMessage(1, "username")))
-		var res2 message.Message
-		require.Nil(t, c2.Receive(&res2))
-		if res2.Tag() == 0 {
-			// Race condition, we got the broadcast message.
-			// That's fine, get another message in that case:
-			require.Nil(t, c2.Receive(&res2))
-		}
-		assert.Equal(t, message.KindPut, res2.Kind())
-		assert.EqualValues(t, 1, res2.Tag())
-		assert.Equal(t, "username", res2.Key())
-		assert.Equal(t, "glenda", res2.Value())
-		assert.EqualValues(t, 1, res2.Version())
-
-		// No more messages should be sent (in particular, c1 doesn't get
-		// the broadcast message).
-		assert.True(t, errors.Is(c1.Receive(&res1), client.ErrTimeout))
-		assert.True(t, errors.Is(c2.Receive(&res2), client.ErrTimeout))
+		vs2, _ := newRemoteVersionedStore(address)
+		version, value, err := vs2.Get([]byte("username"))
+		require.Nil(t, err)
+		assert.EqualValues(t, 1, version)
+		assert.EqualValues(t, "glenda", value)
 	})
 	t.Run("successful put fans out to many clients", func(t *testing.T) {
 		address, cleanup := newDisposableServer(t)
-		defer cleanup()
 
 		// Connect three clients.
-		c1 := newAttachedClient(t, address)
-		c2 := newAttachedClient(t, address)
-		c3 := newAttachedClient(t, address)
+		vs1, _ := newRemoteVersionedStore(address)
+		vs2, ready2 := newRemoteVersionedStore(address)
+		vs3, ready3 := newRemoteVersionedStore(address)
 
 		// One client makes a succesful put.
-		req1 := message.NewPutMessage(1, "foo", "bar", 1)
-		require.Nil(t, c1.Send(req1))
+		require.Nil(t, vs1.Put(444, []byte("foo"), []byte("bar")))
 
-		// Everyone gets a message.
-		var res1, res2, res3 message.Message
-		require.Nil(t, c1.Receive(&res1))
-		require.Nil(t, c2.Receive(&res2))
-		require.Nil(t, c3.Receive(&res3))
-		assert.Equal(t, req1, res1)
-		assert.Equal(t, req1.ForBroadcast(), res2)
-		assert.Equal(t, req1.ForBroadcast(), res3)
+		<-ready2
+		<-ready3
+		cleanup()
 
-		// No more messages should be sent (in particular, c1 doesn't get
-		// the broadcast message).
-		assert.True(t, errors.Is(c1.Receive(&res1), client.ErrTimeout))
-		assert.True(t, errors.Is(c2.Receive(&res2), client.ErrTimeout))
-		assert.True(t, errors.Is(c3.Receive(&res3), client.ErrTimeout))
+		// All clients know *locally* about the value of "foo".
+		verify := func(rvs *storage.RemoteVersionedStore) {
+			version, value, err := rvs.Get([]byte("foo"))
+			if err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+			if want := []byte("bar"); !bytes.Equal(value, want) {
+				t.Errorf("got %q, want %q", value, want)
+			}
+			if want := uint64(444); version != want {
+				t.Errorf("got %d, want %d", version, want)
+			}
+		}
+
+		verify(vs2)
+		verify(vs3)
 	})
 }
 
@@ -177,8 +147,19 @@ func newDisposableServer(t *testing.T) (address string, cleanup func()) {
 	}
 }
 
-func newAttachedClient(t *testing.T, address string) (c *client.Client) {
-	c, err := client.New(client.WithAddress(address), client.WithTimeout(500*time.Millisecond))
-	require.Nil(t, err)
-	return c
+func newAttachedClient(address string) (c *client.Client) {
+	return client.New(client.WithAddress(address))
+}
+
+func newRemoteVersionedStore(address string) (*storage.RemoteVersionedStore, chan message.Message) {
+	recv := make(chan message.Message, 1)
+	vs := storage.NewRemoteVersionedStore(
+		client.New(client.WithAddress(address)),
+		storage.WithRequestTimeout(5*time.Second),
+		storage.WithChangeListener(func(m message.Message) {
+			recv <- m
+		}),
+	)
+	vs.Start()
+	return vs, recv
 }

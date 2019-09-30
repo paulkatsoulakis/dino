@@ -2,23 +2,19 @@ package client
 
 import (
 	"errors"
-	"fmt"
 	"net"
 	"sync"
-	"time"
 
 	"github.com/nicolagi/dino/message"
+	log "github.com/sirupsen/logrus"
 )
 
 var (
-	ErrAttached = errors.New("client is attached")
-	ErrDetached = errors.New("client is detached")
-	ErrTimeout  = errors.New("timeout")
+	ErrTimeout = errors.New("timeout")
 )
 
 type options struct {
 	address string
-	timeout time.Duration
 }
 
 type Option func(*options)
@@ -29,29 +25,23 @@ func WithAddress(value string) Option {
 	}
 }
 
-func WithTimeout(value time.Duration) Option {
-	return func(o *options) {
-		o.timeout = value
-	}
-}
-
 // Client is a low-level metadata server client that can send and receive
 // message.Message's. It can be used to build higher level clients, e.g., a
 // storage.VersionedStore implementation.
 type Client struct {
 	opts options
 
-	emu     sync.Mutex
+	// Both will use a net.Conn to write to and read from. It will usually be
+	// the conn property below, but might not be around the time of
+	// reconnection.
 	encoder *message.Encoder
-
-	dmu     sync.Mutex
 	decoder *message.Decoder
 
-	cmu  sync.Mutex
+	mu   sync.Mutex
 	conn net.Conn
 }
 
-func New(opts ...Option) (*Client, error) {
+func New(opts ...Option) *Client {
 	var c Client
 	c.opts.address = "127.0.0.1:6660"
 	c.encoder = new(message.Encoder)
@@ -59,73 +49,76 @@ func New(opts ...Option) (*Client, error) {
 	for _, o := range opts {
 		o(&c.opts)
 	}
+	return &c
+}
+
+func (c *Client) Close() {
+	c.closeBoth(nil)
+}
+
+func (c *Client) closeBoth(cached net.Conn) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if cached != nil && cached != c.conn {
+		logger := log.WithFields(log.Fields{
+			"local":  cached.LocalAddr(),
+			"remote": cached.RemoteAddr(),
+		})
+		logger.Debug("Closing cached connection")
+		if err := cached.Close(); err != nil {
+			logger.WithField("err", err).Warn("Could not close cached connection")
+		}
+	}
+	if c.conn != nil {
+		logger := log.WithFields(log.Fields{
+			"local":  c.conn.LocalAddr(),
+			"remote": c.conn.RemoteAddr(),
+		})
+		logger.Debug("Closing own connection")
+		if err := c.conn.Close(); err != nil {
+			logger.WithField("err", err).Warn("Could not close current connection")
+		}
+		c.conn = nil
+	}
+}
+
+// Send sends the message to the server.
+func (c *Client) Send(m message.Message) error {
+	return c.doWithConn(func(conn net.Conn) error {
+		return c.encoder.Encode(conn, m)
+	})
+}
+
+// Receive receives a message from the server.
+func (c *Client) Receive(m *message.Message) error {
+	return c.doWithConn(func(conn net.Conn) error {
+		return c.decoder.Decode(conn, m)
+	})
+}
+
+func (c *Client) doWithConn(consumer func(net.Conn) error) error {
+	conn, err := c.getCachedConn()
+	if err != nil {
+		c.closeBoth(conn)
+		return err
+	}
+	if err := consumer(conn); err != nil {
+		c.closeBoth(conn)
+		return err
+	}
+	return nil
+}
+
+func (c *Client) getCachedConn() (net.Conn, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn != nil {
+		return c.conn, nil
+	}
 	conn, err := net.Dial("tcp", c.opts.address)
 	if err != nil {
 		return nil, err
 	}
 	c.conn = conn
-	return &c, nil
-}
-
-// Detach closes the connection. Returns an error if already detached. The
-// client must be considered detached even if this method returns an error.
-func (c *Client) Close() error {
-	c.cmu.Lock()
-	defer c.cmu.Unlock()
-	if c.conn == nil {
-		return nil
-	}
-	err := c.conn.Close()
-	c.conn = nil
-	return err
-}
-
-// Send sends the message to the server. Requires the client to be attached. Non
-// temporary errors will detach the client.
-func (c *Client) Send(m message.Message) error {
-	return c.do(func(conn net.Conn) error {
-		c.emu.Lock()
-		err := c.encoder.Encode(conn, m)
-		defer c.emu.Unlock()
-		return err
-	})
-}
-
-// Receive receives a message from the server. Requires the client to be
-// attached. Non temporary errors will detach the client.
-func (c *Client) Receive(m *message.Message) error {
-	return c.do(func(conn net.Conn) error {
-		c.dmu.Lock()
-		err := c.decoder.Decode(conn, m)
-		c.dmu.Unlock()
-		return err
-	})
-}
-
-func (c *Client) do(fn func(net.Conn) error) error {
-	c.cmu.Lock()
-	if c.conn == nil {
-		conn, err := net.Dial("tcp", c.opts.address)
-		if err != nil {
-			return err
-		}
-		c.conn = conn
-	}
-	conn := c.conn
-	c.cmu.Unlock()
-	if err := conn.SetDeadline(time.Now().Add(c.opts.timeout)); err != nil {
-		return err
-	}
-	err := fn(conn)
-	if operr, ok := err.(*net.OpError); ok {
-		if operr.Timeout() {
-			return ErrTimeout
-		}
-		if !operr.Temporary() {
-			_ = conn.Close()
-			_ = c.Close()
-			return fmt.Errorf("error not temporary: %q, hence %w", operr.Error(), ErrDetached)
-		}
-	}
-	return err
+	return conn, nil
 }

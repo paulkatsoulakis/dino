@@ -3,7 +3,6 @@ package server
 import (
 	"io"
 	"net"
-	"sync"
 
 	"github.com/nicolagi/dino/message"
 	"github.com/nicolagi/dino/storage"
@@ -15,7 +14,6 @@ type serverConn struct {
 	server *Server
 
 	conn    net.Conn
-	emu     sync.Mutex
 	encoder *message.Encoder
 	decoder *message.Decoder
 }
@@ -61,11 +59,9 @@ func (sc *serverConn) handleInput() {
 			continue
 		}
 		output := storage.ApplyMessage(sc.server.opts.store, input)
-		sc.emu.Lock()
 		if err := sc.encoder.Encode(sc.conn, output); err != nil {
 			log.Warn(err)
 		}
-		sc.emu.Unlock()
 		if input.Kind() == message.KindPut && output.Kind() == message.KindPut {
 			// All these goroutines will serialize on the fan-out mutex. It might be
 			// better to use a buffered channel to write to here instead of piling up

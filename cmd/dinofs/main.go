@@ -6,7 +6,6 @@ import (
 	"fmt"
 	golog "log"
 	"os"
-	"time"
 
 	"github.com/google/gops/agent"
 	"github.com/hanwen/go-fuse/v2/fs"
@@ -41,13 +40,9 @@ func main() {
 		defer agent.Close()
 	}
 
-	remoteClient, err := client.New(client.WithAddress(config.MetadataServer), client.WithTimeout(time.Second))
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	var factory dinoNodeFactory
 
+	remoteClient := client.New(client.WithAddress(config.MetadataServer))
 	rvs := storage.NewRemoteVersionedStore(remoteClient, storage.WithChangeListener(factory.invalidateCache))
 	rvs.Start()
 	factory.metadata = rvs

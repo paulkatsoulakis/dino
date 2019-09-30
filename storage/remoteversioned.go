@@ -13,8 +13,7 @@ import (
 )
 
 var (
-	ErrShutdown            = errors.New("shutdown")
-	ErrCancelledRendezvous = errors.New("request and response did not meet")
+	ErrTimeout = errors.New("request timed out")
 )
 
 type options struct {
@@ -95,7 +94,7 @@ func (rs *RemoteVersionedStore) Stop() {
 	// ErrCancelledRendezvous). The receive loop will fail the receive because
 	// of the connection being closed, and will see the stopped flag is set, and
 	// exit.
-	_ = rs.remote.Close()
+	rs.remote.Close()
 	rs.doing.Wait()
 
 	rs.tags.Stop()
@@ -144,7 +143,7 @@ func (rs *RemoteVersionedStore) do(request message.Message) (response message.Me
 		return response, nil
 	case <-time.After(rs.opts.requestTimeout):
 		rs.cancelRendezvous(tag)
-		return response, ErrCancelledRendezvous
+		return response, ErrTimeout
 	}
 }
 
@@ -211,7 +210,7 @@ func (rs *RemoteVersionedStore) receiveLoop() {
 		if err := rs.remote.Receive(&m); err != nil {
 			log.WithFields(log.Fields{
 				"err": err,
-			}).Error("receive error")
+			}).Error("Receive error")
 			rs.mu.Lock()
 			stopped := rs.stopped
 			rs.mu.Unlock()
@@ -223,15 +222,18 @@ func (rs *RemoteVersionedStore) receiveLoop() {
 		}
 		tag := m.Tag()
 		if tag != 0 {
+			log.WithField("message", m).Debug("Received response")
 			rs.doRendezvous(tag, m)
 		}
 		if tag == 0 && m.Kind() == message.KindPut {
+			log.WithField("message", m).Debug("Received broadcast")
 			lres := ApplyMessage(rs.local, m)
 			if lres.Kind() == message.KindError {
 				log.WithFields(log.Fields{
 					"err": lres,
 				}).Error("Could not apply locally")
 			} else if rs.opts.listener != nil {
+				log.WithField("message", m).Debug("Notifying listener")
 				rs.opts.listener(lres)
 			}
 		}

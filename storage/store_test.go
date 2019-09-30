@@ -104,8 +104,7 @@ func TestVersionedStoreImplementations(t *testing.T) {
 					assert.Nil(t, remoteServer.Serve())
 					close(srvc)
 				}()
-				remoteClient, err := client.New(client.WithAddress(remoteAddress), client.WithTimeout(250*time.Millisecond))
-				require.Nil(t, err)
+				remoteClient := client.New(client.WithAddress(remoteAddress))
 				remoteStore := storage.NewRemoteVersionedStore(remoteClient)
 				remoteStore.Start()
 				return remoteStore, func() {
