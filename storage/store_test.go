@@ -171,6 +171,14 @@ func testStore(t *testing.T, store storage.Store) {
 			t.Errorf("got %q, want %q", after, want)
 		}
 	})
+	t.Run("mutating key should not cause a race condition", func(t *testing.T) {
+		key := randomKey()
+		value := []byte("value")
+		if err := store.Put(key, value); err != nil {
+			t.Fatalf("got %v, want nil", err)
+		}
+		copy(key, "other")
+	})
 	t.Run("corresponding versioned store", func(t *testing.T) {
 		vs := storage.NewVersionedWrapper(store)
 		testVersionedStore(t, vs)

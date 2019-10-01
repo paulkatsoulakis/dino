@@ -20,7 +20,7 @@ func NewInMemoryStore() *InMemoryStore {
 
 func (s *InMemoryStore) Put(key, value []byte) (err error) {
 	s.Lock()
-	s.m[string(key)] = append([]byte{}, value...)
+	s.m[string(key)] = dup(value)
 	s.Unlock()
 	return nil
 }

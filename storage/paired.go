@@ -61,7 +61,7 @@ func (s Paired) Put(key, value []byte) (err error) {
 	// This can get stuck if it fills up and the remote is not able to fulfill
 	// our requests. Also, if we kill the process in the middle of propagation,
 	// we'll have missing data on the remote.
-	s.wbc <- [2][]byte{key, value}
+	s.wbc <- [2][]byte{dup(key), dup(value)}
 	return nil
 }
 
@@ -89,4 +89,10 @@ func (s Paired) writeback1(key, value []byte) {
 		// Should randomize.
 		time.Sleep(time.Second)
 	}
+}
+
+func dup(p []byte) []byte {
+	q := make([]byte, len(p))
+	copy(q, p)
+	return q
 }

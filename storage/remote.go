@@ -24,11 +24,11 @@ func (r *RemoteStore) Put(key, value []byte) (err error) {
 		return err
 	}
 	response, err := http.DefaultClient.Do(request)
-	defer func() {
-		if response != nil && response.Body != nil {
+	if response != nil && response.Body != nil {
+		defer func() {
 			_ = response.Body.Close()
-		}
-	}()
+		}()
+	}
 	if err != nil {
 		return err
 	}
@@ -45,11 +45,11 @@ func (r *RemoteStore) Put(key, value []byte) (err error) {
 func (r *RemoteStore) Get(key []byte) (value []byte, err error) {
 	url := r.pathFor(key)
 	response, err := http.Get(url)
-	defer func() {
-		if response != nil && response.Body != nil {
+	if response != nil && response.Body != nil {
+		defer func() {
 			_ = response.Body.Close()
-		}
-	}()
+		}()
+	}
 	if err != nil {
 		return nil, err
 	}
