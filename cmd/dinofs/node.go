@@ -265,6 +265,23 @@ func (node *dinoNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	if errno := node.ensureChildLoaded(ctx, child); errno != 0 {
 		return nil, errno
 	}
+
+	// TODO Should persist the content size in the metadata instead of having to
+	// load the contents just for lookup!
+	//
+	// In the below, if we don't report the size, any read to a mmap-ed file
+	// whose *dinoNode content hasn't been loaded would cause a SIGBUS.
+	// We wouldn't even get i/o calls to the *dinoNode.
+	if errno := child.ensureContentLoaded(); errno != 0 {
+		return nil, errno
+	}
+	out.Uid = child.user
+	out.Gid = child.group
+	out.Mode = child.mode
+	out.Atime = uint64(child.time.Unix())
+	out.Mtime = uint64(child.time.Unix())
+	out.Size = uint64(len(child.content))
+
 	return child.EmbeddedInode(), 0
 }
 
@@ -301,10 +318,13 @@ func (node *dinoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno 
 	return errno
 }
 
+// Release would sync writes to mmap-ed files.
+func (node *dinoNode) Release(ctx context.Context, f fs.FileHandle) syscall.Errno {
+	return node.Flush(ctx, f)
+}
+
 func (node *dinoNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
-	// Nothing to do here, we are happy with syncing on each flush call. I've added
-	// it to be able to use vim, IIRC.
-	return 0
+	return node.Flush(ctx, f)
 }
 
 func (node *dinoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
