@@ -3,9 +3,11 @@ package storage_test
 import (
 	"bytes"
 	"errors"
+	"flag"
 	"io/ioutil"
 	"math/rand"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,20 +20,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var (
+	s3params string
+)
+
 func TestStoreImplementations(t *testing.T) {
 	testCases := []struct {
 		name  string
 		setup func(*testing.T) (storage.Store, func())
 	}{
-		/*
-			{
-				name: "Store implementation backed by S3",
-				setup: func(t *testing.T) (s storage.Store, teardown func()) {
-					s3 := storage.NewS3("dinofs", "eu-west-2", "cocky-kare")
-					return s3, func() {}
-				},
+		{
+			name: "Store implementation backed by S3",
+			setup: func(t *testing.T) (s storage.Store, teardown func()) {
+				if s3params == "" {
+					t.Skip()
+				}
+				t.Helper()
+				parts := strings.SplitN(s3params, ",", 3)
+				profile := parts[0]
+				region := parts[1]
+				bucket := parts[2]
+				return storage.NewS3(profile, region, bucket), func() {}
 			},
-		*/
+		},
 		{
 			name: "Store implementation backed by a BoltDB",
 			setup: func(t *testing.T) (s storage.Store, teardown func()) {
@@ -232,4 +243,10 @@ func randomKey() []byte {
 	key := make([]byte, 128)
 	rand.Read(key)
 	return key
+}
+
+func TestMain(m *testing.M) {
+	flag.StringVar(&s3params, "s3", "", "profile, region, bucket for S3 store testing")
+	flag.Parse()
+	os.Exit(m.Run())
 }

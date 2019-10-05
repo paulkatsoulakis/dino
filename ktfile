@@ -14,7 +14,7 @@
       ],
       "run": [
         {
-          "script": "pkg=github.com/nicolagi/dino/^`{dirname $CHANGED_PATH}\ngo test -race $pkg\ngolangci-lint run -E gocritic -E prealloc -E scopelint -E bodyclose `{dirname $CHANGED_PATH}\nerrcheck $pkg\nstaticcheck $pkg"
+          "script": "pkg=github.com/nicolagi/dino/^`{dirname $CHANGED_PATH}\ngo test -race $pkg\ngolangci-lint run -E gocritic -E prealloc -E bodyclose `{dirname $CHANGED_PATH}\nerrcheck $pkg\nstaticcheck $pkg"
         }
       ]
     }
