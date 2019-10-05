@@ -47,7 +47,9 @@ func main() {
 
 	var factory dinoNodeFactory
 
-	factory.metadata = versionedStoreImpl(config, &factory)
+	var metadataClose func()
+	factory.metadata, metadataClose = versionedStoreImpl(config, &factory)
+	defer metadataClose()
 
 	remote, err := storeImpl(config)
 	if err != nil {
@@ -131,7 +133,7 @@ func storeImpl(c *config) (storage.Store, error) {
 	}
 }
 
-func versionedStoreImpl(c *config, factory *dinoNodeFactory) storage.VersionedStore {
+func versionedStoreImpl(c *config, factory *dinoNodeFactory) (store storage.VersionedStore, close func()) {
 	switch c.Metadata.Type {
 	case "dino":
 		s := storage.NewRemoteVersionedStore(
@@ -139,7 +141,7 @@ func versionedStoreImpl(c *config, factory *dinoNodeFactory) storage.VersionedSt
 			storage.WithChangeListener(factory.invalidateCache),
 		)
 		s.Start()
-		return s
+		return s, s.Stop
 	case "dynamodb":
 		s := storage.NewDynamoDBVersionedStore(
 			c.Metadata.Profile,
@@ -148,7 +150,7 @@ func versionedStoreImpl(c *config, factory *dinoNodeFactory) storage.VersionedSt
 			storage.WithChangeListener(factory.invalidateCache),
 		)
 		s.Start()
-		return s
+		return s, s.Stop
 	default:
 		log.WithField("type", c.Metadata.Type).Fatal("Unknown metadata type")
 		panic("not reached")
