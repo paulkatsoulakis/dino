@@ -40,7 +40,11 @@ func TestStoreImplementations(t *testing.T) {
 				profile := parts[0]
 				region := parts[1]
 				bucket := parts[2]
-				return storage.NewS3(profile, region, bucket), func() {}
+				store, err := storage.NewS3Store(profile, region, bucket)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return store, func() {}
 			},
 		},
 		{

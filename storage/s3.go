@@ -14,26 +14,31 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// S3 is an implementation of Store backed by AWS S3.
-type S3 struct {
+// S3Store is an implementation of Store backed by AWS S3.
+type S3Store struct {
 	profile string
 	region  string
 	bucket  string
 	client  *s3.S3
 }
 
-func NewS3(profile, region, bucket string) Store {
-	return &S3{
+func NewS3Store(profile, region, bucket string) (*S3Store, error) {
+	sess, err := session.NewSession(&aws.Config{
+		Region:      &region,
+		Credentials: credentials.NewSharedCredentials("", profile),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &S3Store{
 		profile: profile,
 		region:  region,
 		bucket:  bucket,
-	}
+		client:  s3.New(sess),
+	}, nil
 }
 
-func (s *S3) Get(key []byte) (value []byte, err error) {
-	if err := s.ensureClient(); err != nil {
-		return nil, err
-	}
+func (s *S3Store) Get(key []byte) (value []byte, err error) {
 	hexKey := fmt.Sprintf("%x", key)
 	output, err := s.client.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
@@ -58,31 +63,12 @@ func (s *S3) Get(key []byte) (value []byte, err error) {
 	return ioutil.ReadAll(output.Body)
 }
 
-func (s *S3) Put(key, value []byte) (err error) {
-	err = s.ensureClient()
-	if err == nil {
-		hexKey := fmt.Sprintf("%x", key)
-		_, err = s.client.PutObject(&s3.PutObjectInput{
-			Bucket: aws.String(s.bucket),
-			Key:    aws.String(hexKey),
-			Body:   bytes.NewReader(value),
-		})
-	}
-	return
-}
-
-func (s *S3) ensureClient() error {
-	if s.client != nil {
-		return nil
-	}
-	sess, err := session.NewSession(&aws.Config{
-		Region:      aws.String(s.region),
-		Credentials: credentials.NewSharedCredentials("", s.profile),
+func (s *S3Store) Put(key, value []byte) (err error) {
+	hexKey := fmt.Sprintf("%x", key)
+	_, err = s.client.PutObject(&s3.PutObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(hexKey),
+		Body:   bytes.NewReader(value),
 	})
-	if err != nil {
-		return err
-	}
-	client := s3.New(sess)
-	s.client = client
-	return nil
+	return
 }

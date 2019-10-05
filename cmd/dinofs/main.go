@@ -52,9 +52,13 @@ func main() {
 	rvs.Start()
 	factory.metadata = rvs
 
+	remote, err := storeImpl(config)
+	if err != nil {
+		log.WithField("err", err).Fatal("Could not build store")
+	}
 	pairedStore := storage.NewPaired(
 		storage.NewDiskStore(os.ExpandEnv(config.DataPath)),
-		storage.NewRemoteStore(config.Blobs.Address),
+		remote,
 	)
 	factory.blobs = storage.NewBlobStore(pairedStore)
 
@@ -111,5 +115,21 @@ func redirectLogging(c *config) (cleanup func()) {
 			// Can't use the logger here!
 			_, _ = fmt.Fprintf(os.Stderr, "Could not close log file cleanly %q: %v", pathname, err)
 		}
+	}
+}
+
+func storeImpl(c *config) (storage.Store, error) {
+	switch c.Blobs.Type {
+	case "dino":
+		return storage.NewRemoteStore(c.Blobs.Address), nil
+	case "s3":
+		return storage.NewS3Store(
+			c.Blobs.Profile,
+			c.Blobs.Region,
+			c.Blobs.Bucket,
+		)
+	default:
+		log.WithField("type", c.Blobs.Type).Fatal("Unknown blobs type")
+		panic("not reached")
 	}
 }
