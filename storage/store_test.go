@@ -21,7 +21,8 @@ import (
 )
 
 var (
-	s3params string
+	dynamodbparams string
+	s3params       string
 )
 
 func TestStoreImplementations(t *testing.T) {
@@ -101,6 +102,7 @@ func TestStoreImplementations(t *testing.T) {
 }
 
 func TestVersionedStoreImplementations(t *testing.T) {
+	rand.Seed(time.Now().UnixNano())
 	testCases := []struct {
 		name  string
 		setup func(*testing.T) (storage.VersionedStore, func())
@@ -126,6 +128,28 @@ func TestVersionedStoreImplementations(t *testing.T) {
 					remoteStore.Stop()
 					assert.Nil(t, remoteServer.Shutdown())
 					<-srvc
+				}
+			},
+		},
+		{
+			name: "dynamodb",
+			setup: func(t *testing.T) (store storage.VersionedStore, teardown func()) {
+				if dynamodbparams == "" {
+					t.Skip()
+				}
+				t.Helper()
+				parts := strings.SplitN(dynamodbparams, ",", 3)
+				profile := parts[0]
+				region := parts[1]
+				table := parts[2]
+				ddbvs := storage.NewDynamoDBVersionedStore(
+					profile,
+					region,
+					table,
+				)
+				ddbvs.Start()
+				return ddbvs, func() {
+					ddbvs.Stop()
 				}
 			},
 		},
@@ -250,6 +274,7 @@ func randomKey() []byte {
 }
 
 func TestMain(m *testing.M) {
+	flag.StringVar(&dynamodbparams, "dynamodb", "", "profile, region, table name for DynamoDB versioned store testing")
 	flag.StringVar(&s3params, "s3", "", "profile, region, bucket for S3 store testing")
 	flag.Parse()
 	os.Exit(m.Run())
