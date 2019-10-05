@@ -8,8 +8,8 @@ for (dir in `{
         goimports -w $dir || exit 1
         staticcheck $dir || exit 1
         errcheck $dir || exit 1
-        go test -count 1 $dir || exit 1
-        go test -race -count 1 $dir
+        go test -timeout 10s -count 1 $dir || exit 1
+        go test -timeout 10s -race -count 1 $dir
     }
 }
 go mod tidy || exit 1

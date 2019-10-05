@@ -143,14 +143,16 @@ func versionedStoreImpl(c *config, factory *dinoNodeFactory) (store storage.Vers
 		s.Start()
 		return s, s.Stop
 	case "dynamodb":
-		s := storage.NewDynamoDBVersionedStore(
+		s, err := storage.NewDynamoDBVersionedStore(
 			c.Metadata.Profile,
 			c.Metadata.Region,
 			c.Metadata.Table,
 			storage.WithChangeListener(factory.invalidateCache),
 		)
-		s.Start()
-		return s, s.Stop
+		if err != nil {
+			log.WithField("err", err).Fatal("Could not initialize DynamoDB versioned store")
+		}
+		return s, func() {}
 	default:
 		log.WithField("type", c.Metadata.Type).Fatal("Unknown metadata type")
 		panic("not reached")

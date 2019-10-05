@@ -142,14 +142,15 @@ func TestVersionedStoreImplementations(t *testing.T) {
 				profile := parts[0]
 				region := parts[1]
 				table := parts[2]
-				ddbvs := storage.NewDynamoDBVersionedStore(
+				ddbvs, err := storage.NewDynamoDBVersionedStore(
 					profile,
 					region,
 					table,
 				)
-				ddbvs.Start()
+				if err != nil {
+					t.Fatalf("Could not build DynamoDBVersionedStore: %v", err)
+				}
 				return ddbvs, func() {
-					ddbvs.Stop()
 				}
 			},
 		},
