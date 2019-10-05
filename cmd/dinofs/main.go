@@ -20,6 +20,11 @@ func main() {
 	configFile := flag.String("c", defaultConfigFile, "location of configuration file, or an alias to expand to $HOME/lib/dino/fs-ALIAS.config")
 	flag.Parse()
 
+	log.SetFormatter(&log.TextFormatter{
+		DisableColors: true,
+		FullTimestamp: true,
+	})
+
 	config, err := loadConfig(*configFile)
 	if err != nil {
 		log.Fatalf("Loading configuration from %q: %v", *configFile, err)

@@ -19,6 +19,11 @@ func main() {
 	configFile := flag.String("config", defaultConfigFile, "location of configuration file")
 	flag.Parse()
 
+	log.SetFormatter(&log.TextFormatter{
+		DisableColors: true,
+		FullTimestamp: true,
+	})
+
 	opts, err := loadConfig(*configFile)
 	if err != nil {
 		log.WithFields(log.Fields{

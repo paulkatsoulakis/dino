@@ -18,6 +18,11 @@ func main() {
 	optsFile := flag.String("config", os.ExpandEnv("$HOME/lib/dino/metadataserver.config"), "location of configuration file")
 	flag.Parse()
 
+	log.SetFormatter(&log.TextFormatter{
+		DisableColors: true,
+		FullTimestamp: true,
+	})
+
 	opts, err := loadOptions(*optsFile)
 	if err != nil {
 		log.Fatalf("Loading configuration from %q: %v", *optsFile, err)
