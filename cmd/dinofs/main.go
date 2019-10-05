@@ -42,14 +42,14 @@ func main() {
 
 	var factory dinoNodeFactory
 
-	remoteClient := client.New(client.WithAddress(config.MetadataServer))
+	remoteClient := client.New(client.WithAddress(config.Metadata.Address))
 	rvs := storage.NewRemoteVersionedStore(remoteClient, storage.WithChangeListener(factory.invalidateCache))
 	rvs.Start()
 	factory.metadata = rvs
 
 	pairedStore := storage.NewPaired(
 		storage.NewDiskStore(os.ExpandEnv(config.DataPath)),
-		storage.NewRemoteStore(config.BlobServer),
+		storage.NewRemoteStore(config.Blobs.Address),
 	)
 	factory.blobs = storage.NewBlobStore(pairedStore)
 

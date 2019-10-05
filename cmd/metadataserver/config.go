@@ -1,8 +1,9 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
+
+	"github.com/rogpeppe/rjson"
 )
 
 type options struct {
@@ -17,6 +18,6 @@ func loadOptions(pathname string) (*options, error) {
 		return nil, err
 	}
 	var opts *options
-	err = json.NewDecoder(f).Decode(&opts)
+	err = rjson.NewDecoder(f).Decode(&opts)
 	return opts, err
 }

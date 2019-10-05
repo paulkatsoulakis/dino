@@ -1,8 +1,9 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
+
+	"github.com/rogpeppe/rjson"
 )
 
 type config struct {
@@ -16,6 +17,6 @@ func loadConfig(pathname string) (*config, error) {
 		return nil, err
 	}
 	var c *config
-	err = json.NewDecoder(f).Decode(&c)
+	err = rjson.NewDecoder(f).Decode(&c)
 	return c, err
 }
