@@ -47,10 +47,7 @@ func main() {
 
 	var factory dinoNodeFactory
 
-	remoteClient := client.New(client.WithAddress(config.Metadata.Address))
-	rvs := storage.NewRemoteVersionedStore(remoteClient, storage.WithChangeListener(factory.invalidateCache))
-	rvs.Start()
-	factory.metadata = rvs
+	factory.metadata = versionedStoreImpl(config, &factory)
 
 	remote, err := storeImpl(config)
 	if err != nil {
@@ -130,6 +127,30 @@ func storeImpl(c *config) (storage.Store, error) {
 		)
 	default:
 		log.WithField("type", c.Blobs.Type).Fatal("Unknown blobs type")
+		panic("not reached")
+	}
+}
+
+func versionedStoreImpl(c *config, factory *dinoNodeFactory) storage.VersionedStore {
+	switch c.Metadata.Type {
+	case "dino":
+		s := storage.NewRemoteVersionedStore(
+			client.New(client.WithAddress(c.Metadata.Address)),
+			storage.WithChangeListener(factory.invalidateCache),
+		)
+		s.Start()
+		return s
+	case "dynamodb":
+		s := storage.NewDynamoDBVersionedStore(
+			c.Metadata.Profile,
+			c.Metadata.Region,
+			c.Metadata.Table,
+			storage.WithChangeListener(factory.invalidateCache),
+		)
+		s.Start()
+		return s
+	default:
+		log.WithField("type", c.Metadata.Type).Fatal("Unknown metadata type")
 		panic("not reached")
 	}
 }
