@@ -1,7 +1,10 @@
 package storage
 
 import (
+	"fmt"
+
 	"github.com/nicolagi/dino/message"
+	log "github.com/sirupsen/logrus"
 )
 
 func ApplyMessage(store VersionedStore, in message.Message) (out message.Message) {
@@ -18,6 +21,10 @@ func ApplyMessage(store VersionedStore, in message.Message) (out message.Message
 		if err != nil {
 			return message.NewErrorMessage(inTag, err.Error())
 		}
+		log.WithFields(log.Fields{
+			"key":     fmt.Sprintf("%.10x", in.Key()),
+			"version": in.Version(),
+		}).Debug("Applied put message")
 		return in
 	case message.KindError:
 		return message.NewErrorMessage(inTag, "error messages cannot be applied")
