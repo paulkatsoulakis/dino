@@ -16,8 +16,8 @@ import (
 )
 
 func main() {
-	defaultConfigFile := os.ExpandEnv("$HOME/lib/dino/dinofs.config")
-	configFile := flag.String("config", defaultConfigFile, "location of configuration file")
+	defaultConfigFile := os.ExpandEnv("$HOME/lib/dino/fs-default.config")
+	configFile := flag.String("c", defaultConfigFile, "location of configuration file, or an alias to expand to $HOME/lib/dino/fs-ALIAS.config")
 	flag.Parse()
 
 	config, err := loadConfig(*configFile)
