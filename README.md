@@ -24,6 +24,72 @@ provide the filesystem functionality. It's heavily cached and does synchronous
 network IO to commit metadata mutations and to fetch blobs that are not yet
 cached.
 
+## Getting started
+
+If Go is not installed in your system, you can download it from https://golang.org/.
+
+You also need FUSE support in your system, which could be achieved with `apt install -qy fuse` or the equivalent command in your Linux distribution. There is FUSE support for MacOS at https://osxfuse.github.io/.
+
+Next install the latest revision of dinofs, metadataserver, blobserver with the following command.
+
+	go get -u github.com/nicolagi/dino/cmd/...
+
+After this, create some initial configuration.
+
+	mkdir -p $HOME/lib/dino
+	cat > $HOME/lib/dino/blobserver.config <<EOF
+	{
+		blob_server: "localhost:3002"
+		debug: true
+	}
+	EOF
+	cat > $HOME/lib/dino/metadataserver.config <<EOF
+	{
+		metadata_server: "localhost:3003"
+		debug: true
+	}
+	EOF
+	cat > $HOME/lib/dino/fs-default.config <<EOF
+	{
+		blobs: {
+			type: "dino"
+			address: "localhost:3002"
+		}
+		metadata: {
+			type: "dino"
+			address: "localhost:3003"
+		}
+		mountpoint: "/mnt/dino"
+		debug: true
+	}
+	EOF
+
+Prepare the mountpoint so your user can mount dinofs:
+
+	sudo mkdir /mnt/dino
+	sudo chown $USER /mnt/dino
+
+Start all servers in the background:
+
+	blobserver &
+	metadataserver &
+	dinofs &
+
+At this point the fs should be mounted:
+
+	$ mount | grep dinofs
+	dinofs on /mnt/dino type fuse.dinofs (rw,nosuid,nodev,relatime,user_id=1000,group_id=100)
+
+In case something goes wrong, log files in `$HOME/lib/dino/*log` should indicate what the problem is.
+
+This should be enough to start experimenting. After this, one probably wants to expose blobserver and metadataserver over a network, but beware of security implications (see section below).
+
+To unmount, run
+
+	fusermount -u /mnt/dino
+
+which will also terminate the dinofs process. The blobserver and metadataserver processes will run until killed.
+
 ## Why FUSE instead of 9P?
 
 Contrary to the [muscle file system](https://github.com/nicolagi/muscle), I need
